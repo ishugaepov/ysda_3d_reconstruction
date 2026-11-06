@@ -21,6 +21,8 @@ ap.add_argument("out")
 ap.add_argument("--max-side", type=int, default=1024)
 ap.add_argument("--da3-res", type=int, default=504)
 ap.add_argument("--pose-method", default="cam_dec")
+ap.add_argument("--masks-from", help="reuse masks from an earlier .npz (skips background removal)")
+ap.add_argument("--drop", default="", help="comma-separated image names to leave out")
 args = ap.parse_args()
 sys.argv = sys.argv[:1]  # keep ComfyUI's own argparse quiet
 
@@ -47,11 +49,18 @@ def first(out):
 torch.set_grad_enabled(False)  # the server runs nodes in inference mode; without this memory explodes
 t0 = time.time()
 images, valid, names = load_folder(args.folder, args.max_side)
+keep_idx = [i for i, n in enumerate(names) if n not in set(filter(None, args.drop.split(",")))]
+images, valid, names = images[keep_idx], valid[keep_idx], [names[i] for i in keep_idx]
 img_t = torch.from_numpy(images)
 print(f"loaded {len(names)} images -> batch {tuple(img_t.shape)}  ({time.time()-t0:.1f}s)")
 
-bg = first(LoadBackgroundRemovalModel.execute("birefnet.safetensors"))
-masks = torch.cat([first(RemoveBackground.execute(bg, img_t[i:i + 1])) for i in range(len(names))])
+if args.masks_from:
+    prev = np.load(args.masks_from)
+    by_name = {str(n): m for n, m in zip(prev["names"], prev["masks"])}
+    masks = torch.from_numpy(np.stack([by_name[n] for n in names]))
+else:
+    bg = first(LoadBackgroundRemovalModel.execute("birefnet.safetensors"))
+    masks = torch.cat([first(RemoveBackground.execute(bg, img_t[i:i + 1])) for i in range(len(names))])
 masks = masks * torch.from_numpy(valid)
 print(f"masks {tuple(masks.shape)}  ({time.time()-t0:.1f}s)")
 

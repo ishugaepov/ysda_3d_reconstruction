@@ -1,0 +1,122 @@
+"""Per-stage diagnostics: which step of the pipeline loses quality?
+
+All functions return images (float [0,1], H x W x 3) and plain-number stats, so they can be shown in
+ComfyUI preview nodes and pasted into journal entries.
+"""
+from __future__ import annotations
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from . import recon
+from .render import render_points
+
+
+def _turbo(x: torch.Tensor) -> torch.Tensor:
+    """Cheap turbo-like colormap for x in [0,1] → (...,3)."""
+    x = x.clamp(0, 1)
+    r = (1.5 - (4 * x - 3).abs()).clamp(0, 1)
+    g = (1.5 - (4 * x - 2).abs()).clamp(0, 1)
+    b = (1.5 - (4 * x - 1).abs()).clamp(0, 1)
+    return torch.stack([r, g, b], -1)
+
+
+def mask_overlay(images: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+    """Object kept as is, background dimmed, mask boundary in yellow. (B,H,W,3)."""
+    m = (masks >= 0.5).float()
+    edge = (F.max_pool2d(m[:, None], 5, 1, 2) - (-F.max_pool2d(-m[:, None], 5, 1, 2)))[:, 0] > 0
+    out = images * (0.25 + 0.75 * masks[..., None])
+    out[edge] = torch.tensor([1.0, 0.9, 0.0])
+    return out
+
+
+def consistency_check(depth, K, E, images, keep, stride: int = 3, rel_tol: float = 0.02, max_points=600_000):
+    """Project the masked points of all OTHER views into each view and compare with that view.
+
+    With perfect poses and depth, other views' points land exactly on this view's object, at the
+    same depth and with the same colours. Returns:
+      tiles (S,H,3W,3): [photo | other views' points rendered here | depth disagreement heatmap]
+      stats: per view, median |z_other - z_this| / z_this and the fraction above rel_tol.
+    The heatmap shows blue = agree, red = >= 3*rel_tol; grey = only one source sees it.
+    """
+    S, H, W = depth.shape
+    pts, cols, owner = [], [], []
+    for j in range(S):
+        X, (v, u) = recon.unproject(depth[j], K[j], E[j], keep[j], stride)
+        pts.append(X); cols.append(images[j][v, u]); owner.append(torch.full((len(X),), j))
+    pts, cols, owner = torch.cat(pts), torch.cat(cols), torch.cat(owner)
+    if len(pts) > max_points:
+        sel = torch.randperm(len(pts))[:max_points]
+        pts, cols, owner = pts[sel], cols[sel], owner[sel]
+    tiles, stats = [], []
+    for i in range(S):
+        others = owner != i
+        P = pts[others]
+        Xc = P @ E[i][:3, :3].T + E[i][:3, 3]
+        # Depth image of the other views' points (as colours = depth), via the splat renderer.
+        zimg = render_points(P, Xc[:, 2:3].repeat(1, 3), K[i], E[i], (H, W), radius=1, bg=np.inf)[..., 0]
+        cimg = render_points(P, cols[others], K[i], E[i], (H, W), radius=1, bg=1.0)
+        zimg = torch.from_numpy(zimg)
+        both = keep[i] & torch.isfinite(zimg)
+        rel = ((zimg - depth[i]).abs() / depth[i].clamp(min=1e-6))
+        rel_both = rel[both]
+        med = float(rel_both.median()) if both.any() else float("nan")
+        frac = float((rel_both > rel_tol).float().mean()) if both.any() else float("nan")
+        stats.append({"view": i, "median_rel_depth_err": round(med, 4), f"frac_over_{rel_tol}": round(frac, 3),
+                      "overlap_px": int(both.sum())})
+        heat = torch.full((H, W, 3), 0.85)
+        heat[keep[i] | torch.isfinite(zimg)] = 0.55
+        heat[both] = _turbo(rel[both] / (3 * rel_tol))
+        tiles.append(torch.cat([images[i], torch.from_numpy(cimg), heat], 1))
+    return torch.stack(tiles), stats, (pts, cols)
+
+
+def silhouette_check(verts, faces, K, E, masks, n_samples=400_000):
+    """Compare the reconstructed shape's silhouette with each mask.
+
+    Overlay: white = both, green = in mask but carved away (lost volume),
+    magenta = mesh outside the mask (extra volume). Returns (S,H,W,3) and per-view IoU.
+    """
+    S, H, W = masks.shape
+    tri = verts[faces]
+    area = torch.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0], dim=-1).norm(dim=-1)
+    fi = torch.multinomial(area / area.sum(), n_samples, replacement=True)
+    r1, r2 = torch.rand(n_samples).sqrt(), torch.rand(n_samples)
+    w = torch.stack([1 - r1, r1 * (1 - r2), r1 * r2], -1)
+    P = (tri[fi] * w[..., None]).sum(1)
+    ones = torch.ones(len(P), 3)
+    out, ious = [], []
+    for i in range(S):
+        sil = torch.from_numpy(render_points(P, ones, K[i], E[i], (H, W), radius=2, bg=0.0))[..., 0] > 0.5
+        sil = (-F.max_pool2d(-F.max_pool2d(sil.float()[None, None], 5, 1, 2), 5, 1, 2))[0, 0] > 0.5  # close holes
+        m = masks[i] >= 0.5
+        inter, union = (sil & m).sum(), (sil | m).sum()
+        ious.append(round(float(inter) / max(1, float(union)), 3))
+        img = torch.zeros(H, W, 3)
+        img[sil & m] = 1.0
+        img[m & ~sil] = torch.tensor([0.1, 0.9, 0.1])
+        img[sil & ~m] = torch.tensor([0.9, 0.1, 0.9])
+        out.append(img)
+    return torch.stack(out), ious
+
+
+def write_point_cloud_ply(path: str, points: torch.Tensor, colors: torch.Tensor, camera_centers=None):
+    """Binary PLY with RGB. Cameras (if given) are added as small red point clusters."""
+    P, C = points.numpy().astype(np.float32), (colors.numpy() * 255).clip(0, 255).astype(np.uint8)
+    if camera_centers is not None:
+        cc = camera_centers.numpy().astype(np.float32)
+        s = float(np.ptp(P, 0).max()) * 0.01
+        blob = (np.random.default_rng(0).normal(size=(60, 3)) * s).astype(np.float32)
+        cams = (cc[:, None, :] + blob[None]).reshape(-1, 3)
+        P = np.concatenate([P, cams]); C = np.concatenate([C, np.tile([[255, 0, 0]], (len(cams), 1)).astype(np.uint8)])
+    # OpenCV (y down, z forward) → viewer convention (y up), same as recon.opencv_to_gltf.
+    P = P * np.array([1, -1, -1], np.float32)
+    rec = np.empty(len(P), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("r", "u1"), ("g", "u1"), ("b", "u1")])
+    rec["x"], rec["y"], rec["z"] = P.T
+    rec["r"], rec["g"], rec["b"] = C.T
+    header = ("ply\nformat binary_little_endian 1.0\n"
+              f"element vertex {len(P)}\nproperty float x\nproperty float y\nproperty float z\n"
+              "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n")
+    with open(path, "wb") as f:
+        f.write(header.encode()); f.write(rec.tobytes())

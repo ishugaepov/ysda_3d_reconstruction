@@ -18,7 +18,7 @@ import folder_paths  # noqa: E402
 from comfy_api.latest._util.geometry_types import MESH  # noqa: E402
 
 from ysda3d import images as yimages  # noqa: E402
-from ysda3d import recon  # noqa: E402
+from ysda3d import diagnostics, recon  # noqa: E402
 from ysda3d.render import render_points  # noqa: E402
 
 CATEGORY = "YSDA 3D"
@@ -107,8 +107,8 @@ class YSDAReconstructMesh:
             "valid_mask": ("MASK", {"tooltip": "Padding mask from YSDA Load Image Folder"}),
         }}
 
-    RETURN_TYPES = ("MESH", "IMAGE", "STRING")
-    RETURN_NAMES = ("mesh", "preview", "report")
+    RETURN_TYPES = ("MESH", "IMAGE", "STRING", "IMAGE")
+    RETURN_NAMES = ("mesh", "preview", "report", "silhouettes")
     FUNCTION = "run"
     CATEGORY = CATEGORY
     DESCRIPTION = ("v0 reconstruction: voxel carving with masks + DA3 depth, surface nets, vertex colours "
@@ -146,16 +146,132 @@ class YSDAReconstructMesh:
                  for i in idx]
         preview = torch.cat(tiles, 1)[None]
 
+        sil, ious = diagnostics.silhouette_check(verts, faces, K, E, masks)
+        report["silhouette_iou_mean"] = round(float(np.mean(ious)), 3)
+        report["silhouette_iou_per_view"] = ious
+
         mesh = MESH(recon.to_display(verts)[None], faces[None], vertex_colors=colors[None])
-        return mesh, preview, json.dumps(report, indent=1)
+        return mesh, preview, json.dumps(report, indent=1), sil
+
+
+def _geometry_cameras(g):
+    depth = g["depth"].float().cpu()
+    S, H, W = depth.shape
+    res = int(g.get("ysda_process_res", 504))
+    K = recon.rescale_intrinsics(g["intrinsics"][0].cpu(), recon.da3_processing_size(H, W, res), (H, W))
+    return depth, K, g["extrinsics"][0].float().cpu()
+
+
+def _fit_masks(masks, H, W, valid_mask=None):
+    masks = masks.float().cpu()
+    if masks.shape[-2:] != (H, W):
+        masks = torch.nn.functional.interpolate(masks[:, None], size=(H, W), mode="bilinear")[:, 0]
+    if valid_mask is not None:
+        masks = masks * valid_mask.float().cpu()
+    return masks
+
+
+class YSDAMaskOverlay:
+    """Show the object masks on the photos (background dimmed, outline in yellow)."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"images": ("IMAGE",), "mask": ("MASK",)},
+                "optional": {"valid_mask": ("MASK",)}}
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("overlay",)
+    FUNCTION = "run"
+    CATEGORY = CATEGORY + "/diagnostics"
+
+    def run(self, images, mask, valid_mask=None):
+        H, W = images.shape[1:3]
+        return (diagnostics.mask_overlay(images.float().cpu(), _fit_masks(mask, H, W, valid_mask)),)
+
+
+class YSDADepthPreview:
+    """Stage-B view: DA3 depth (turbo colours, near = red) and confidence (bright = confident) per photo."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"da3_geometry": ("DA3_GEOMETRY",)},
+                "optional": {"object_mask": ("MASK",)}}
+
+    RETURN_TYPES = ("IMAGE", "IMAGE")
+    RETURN_NAMES = ("depth", "confidence")
+    FUNCTION = "run"
+    CATEGORY = CATEGORY + "/diagnostics"
+
+    def run(self, da3_geometry, object_mask=None):
+        depth = da3_geometry["depth"].float().cpu()
+        S, H, W = depth.shape
+        m = _fit_masks(object_mask, H, W) >= 0.5 if object_mask is not None else torch.ones_like(depth, dtype=torch.bool)
+        d_out, c_out = [], []
+        conf = da3_geometry.get("confidence")
+        for i in range(S):
+            sel = depth[i][m[i]] if m[i].any() else depth[i].flatten()
+            lo, hi = torch.quantile(sel, 0.02), torch.quantile(sel, 0.98)
+            dimg = diagnostics._turbo(1 - (depth[i] - lo) / (hi - lo).clamp(min=1e-6))
+            dimg[~m[i]] *= 0.3
+            d_out.append(dimg)
+            if conf is not None:
+                c = conf[i].float().cpu()
+                c = (c - torch.quantile(c, 0.02)) / (torch.quantile(c, 0.98) - torch.quantile(c, 0.02)).clamp(min=1e-6)
+                c_out.append(c.clamp(0, 1)[..., None].repeat(1, 1, 3))
+            else:
+                c_out.append(torch.zeros(H, W, 3))
+        return torch.stack(d_out), torch.stack(c_out)
+
+
+class YSDACrossViewConsistency:
+    """Stage-B check: do DA3's views agree? Projects every other view's 3D points into each view."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "da3_geometry": ("DA3_GEOMETRY",),
+            "object_mask": ("MASK",),
+            "rel_tolerance": ("FLOAT", {"default": 0.02, "min": 0.001, "max": 0.2, "step": 0.001,
+                                        "tooltip": "Depth disagreement (fraction of depth) shown as fully red at 3x this"}),
+        }, "optional": {"valid_mask": ("MASK",)}}
+
+    RETURN_TYPES = ("IMAGE", "STRING", "FILE_3D_PLY")
+    RETURN_NAMES = ("per_view", "stats", "point_cloud")
+    FUNCTION = "run"
+    CATEGORY = CATEGORY + "/diagnostics"
+    DESCRIPTION = ("Per view: [photo | other views' points rendered from this camera | depth disagreement: "
+                   "blue = agree, red = disagree]. Point cloud: all views fused, cameras as red blobs.")
+
+    def run(self, da3_geometry, object_mask, rel_tolerance, valid_mask=None):
+        from comfy_api.latest._util.geometry_types import File3D
+        depth, K, E = _geometry_cameras(da3_geometry)
+        S, H, W = depth.shape
+        images = da3_geometry["image"].float().cpu()
+        keep = _fit_masks(object_mask, H, W, valid_mask) >= 0.5
+        tiles, stats, (pts, cols) = diagnostics.consistency_check(depth, K, E, images, keep, rel_tol=rel_tolerance)
+        out_dir = os.path.join(folder_paths.get_output_directory(), "ysda", "diagnostics")
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, "fused_points.ply")
+        diagnostics.write_point_cloud_ply(path, pts, cols, recon.camera_centers(E))
+        meds = [x["median_rel_depth_err"] for x in stats]
+        summary = {"median_rel_depth_err_over_views": round(float(np.nanmedian(meds)), 4),
+                   "worst_views": sorted(stats, key=lambda x: -x["median_rel_depth_err"])[:3],
+                   "per_view": stats, "point_cloud": path}
+        return tiles, json.dumps(summary, indent=1), File3D(path)
 
 
 NODE_CLASS_MAPPINGS = {
+    "YSDAMaskOverlay": YSDAMaskOverlay,
+    "YSDADepthPreview": YSDADepthPreview,
+    "YSDACrossViewConsistency": YSDACrossViewConsistency,
     "YSDALoadImageFolder": YSDALoadImageFolder,
     "YSDADepthAnything3Multiview": YSDADepthAnything3Multiview,
     "YSDAReconstructMesh": YSDAReconstructMesh,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "YSDAMaskOverlay": "YSDA Mask Overlay (diagnostic)",
+    "YSDADepthPreview": "YSDA Depth & Confidence (diagnostic)",
+    "YSDACrossViewConsistency": "YSDA Cross-View Consistency (diagnostic)",
     "YSDALoadImageFolder": "YSDA Load Image Folder",
     "YSDADepthAnything3Multiview": "YSDA Depth Anything 3 Multiview",
     "YSDAReconstructMesh": "YSDA Reconstruct Mesh (v0)",
