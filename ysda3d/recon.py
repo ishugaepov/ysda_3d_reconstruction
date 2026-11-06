@@ -43,14 +43,30 @@ def camera_centers(E: torch.Tensor) -> torch.Tensor:
     return -(R.transpose(1, 2) @ t.unsqueeze(-1)).squeeze(-1)
 
 
-def project(X: torch.Tensor, K: torch.Tensor, E: torch.Tensor):
-    """World points (N,3) → pixel coords (N,2) and camera depth z (N,) for one view."""
+def project(X: torch.Tensor, K: torch.Tensor, E: torch.Tensor, k1: float = 0.0):
+    """World points (N,3) → pixel coords (N,2) and camera depth z (N,) for one view.
+
+    k1: one-parameter radial distortion (COLMAP SIMPLE_RADIAL): p_d = p (1 + k1 |p|²) on
+    normalised coordinates p = (x/z, y/z).
+    """
     Xc = X @ E[:3, :3].T + E[:3, 3]
     z = Xc[:, 2]
-    zs = z.clamp(min=1e-6)
-    u = K[0, 0] * Xc[:, 0] / zs + K[0, 2]
-    v = K[1, 1] * Xc[:, 1] / zs + K[1, 2]
+    p = Xc[:, :2] / z.clamp(min=1e-6)[:, None]
+    if k1:
+        p = p * (1 + k1 * (p * p).sum(-1, keepdim=True))
+    u = K[0, 0] * p[:, 0] + K[0, 2]
+    v = K[1, 1] * p[:, 1] + K[1, 2]
     return torch.stack([u, v], -1), z
+
+
+def undistort_normalized(pd: torch.Tensor, k1: float, iters: int = 8) -> torch.Tensor:
+    """Invert p_d = p (1 + k1 |p|²) by fixed-point iteration (fine for |k1| ~ 0.05)."""
+    if not k1:
+        return pd
+    p = pd.clone()
+    for _ in range(iters):
+        p = pd / (1 + k1 * (p * p).sum(-1, keepdim=True))
+    return p
 
 
 def sample(img: torch.Tensor, uv: torch.Tensor, mode: str = "bilinear") -> torch.Tensor:
@@ -61,22 +77,28 @@ def sample(img: torch.Tensor, uv: torch.Tensor, mode: str = "bilinear") -> torch
     return out[0, :, 0].T
 
 
-def unproject(depth: torch.Tensor, K: torch.Tensor, E: torch.Tensor, keep: torch.Tensor, stride: int = 4):
+def unproject(depth: torch.Tensor, K: torch.Tensor, E: torch.Tensor, keep: torch.Tensor, stride: int = 4,
+              k1: float = 0.0):
     """Masked depth of one view → world points (N,3) plus their pixel indices."""
     H, W = depth.shape
     v, u = torch.meshgrid(torch.arange(0, H, stride), torch.arange(0, W, stride), indexing="ij")
     sel = keep[v, u] & (depth[v, u] > 0)
     u, v = u[sel].float(), v[sel].float()
     d = depth[v.long(), u.long()]
-    Xc = torch.stack([(u - K[0, 2]) / K[0, 0] * d, (v - K[1, 2]) / K[1, 1] * d, d], -1)
+    p = undistort_normalized(torch.stack([(u - K[0, 2]) / K[0, 0], (v - K[1, 2]) / K[1, 1]], -1), k1)
+    Xc = torch.cat([p * d[:, None], d[:, None]], -1)
     R, t = E[:3, :3], E[:3, 3]
     return (Xc - t) @ R, (v.long(), u.long())
 
 
-def fused_points(depth, K, E, images, keep, stride: int = 4):
+def _k1(dist, i):
+    return float(dist[i]) if dist is not None else 0.0
+
+
+def fused_points(depth, K, E, images, keep, stride: int = 4, dist=None):
     pts, cols = [], []
     for i in range(depth.shape[0]):
-        X, (v, u) = unproject(depth[i], K[i], E[i], keep[i], stride)
+        X, (v, u) = unproject(depth[i], K[i], E[i], keep[i], stride, _k1(dist, i))
         pts.append(X)
         cols.append(images[i][v, u])
     return torch.cat(pts), torch.cat(cols)
@@ -89,7 +111,7 @@ def object_bounds(points: torch.Tensor, lo: float = 0.02, hi: float = 0.98, marg
 
 
 def carve(depth, K, E, masks, bmin, bmax, res: int = 192, depth_tol: float = 0.02,
-          max_violations: int = 1, min_views: int = 3, chunk: int = 2_000_000):
+          max_violations: int = 1, min_views: int = 3, chunk: int = 2_000_000, dist=None):
     """Voxel carving with mask and depth constraints.
 
     depth_tol is a fraction of the bounding-box diagonal: a voxel more than that far in front of
@@ -107,7 +129,7 @@ def carve(depth, K, E, masks, bmin, bmax, res: int = 192, depth_tol: float = 0.0
     for i in range(S):
         for a in range(0, len(grid), chunk):
             X = grid[a:a + chunk]
-            uv, z = project(X, K[i], E[i])
+            uv, z = project(X, K[i], E[i], _k1(dist, i))
             inside = (z > 0) & (uv[:, 0] >= 0) & (uv[:, 0] <= W - 1) & (uv[:, 1] >= 0) & (uv[:, 1] <= H - 1)
             m = sample(masks[i][..., None], uv, "nearest")[:, 0]
             d = sample(depth[i][..., None], uv, "nearest")[:, 0]
@@ -148,7 +170,7 @@ def largest_component(verts: np.ndarray, faces: np.ndarray):
     return verts[used], remap[faces]
 
 
-def vertex_colors(verts, normals, depth, K, E, images, masks, vis_tol: float, power: float = 2.0):
+def vertex_colors(verts, normals, depth, K, E, images, masks, vis_tol: float, power: float = 2.0, dist=None):
     """Colour each vertex from the views that see it, weighted by how frontally they see it.
 
     Visible = projects inside the mask and lies within vis_tol of that view's observed depth.
@@ -159,7 +181,7 @@ def vertex_colors(verts, normals, depth, K, E, images, masks, vis_tol: float, po
     wsum = torch.zeros(len(verts))
     S, H, W = depth.shape
     for i in range(S):
-        uv, z = project(verts, K[i], E[i])
+        uv, z = project(verts, K[i], E[i], _k1(dist, i))
         inside = (z > 0) & (uv[:, 0] >= 0) & (uv[:, 0] <= W - 1) & (uv[:, 1] >= 0) & (uv[:, 1] <= H - 1)
         d = sample(depth[i][..., None], uv, "nearest")[:, 0]
         m = sample(masks[i][..., None], uv, "nearest")[:, 0]
@@ -184,18 +206,18 @@ def opencv_to_gltf(v: torch.Tensor) -> torch.Tensor:
 
 def reconstruct(depth, K, E, images, masks, surface_fn, res: int = 192, depth_tol: float = 0.02,
                 max_violations: int = 1, conf=None, conf_quantile: float = 0.1, smooth_iters: int = 1,
-                log=print):
+                dist=None, log=print):
     """Full v0: returns (verts in DA3 world space (V,3), faces (F,3), colors (V,3), report dict)."""
     keep = masks >= 0.5
     if conf is not None:
         thr = torch.quantile(conf[keep][torch.randperm(int(keep.sum()))[:1_000_000]], conf_quantile)
         keep = keep & (conf >= thr)
-    pts, _ = fused_points(depth, K, E, images, keep)
+    pts, _ = fused_points(depth, K, E, images, keep, dist=dist)
     if len(pts) < 100:
         raise ValueError("too few object points: check the masks (is the object segmented?)")
     bmin, bmax = object_bounds(pts)
     log(f"fused {len(pts)} points; bounds {bmin.tolist()} .. {bmax.tolist()}")
-    occ, voxel, origin = carve(depth, K, E, masks, bmin, bmax, res, depth_tol, max_violations)
+    occ, voxel, origin = carve(depth, K, E, masks, bmin, bmax, res, depth_tol, max_violations, dist=dist)
     log(f"carved grid {tuple(occ.shape)}: {int(occ.sum())} occupied voxels")
     if occ.sum() == 0:
         raise ValueError("carving removed everything: masks or camera poses are inconsistent")
@@ -212,7 +234,7 @@ def reconstruct(depth, K, E, images, masks, surface_fn, res: int = 192, depth_to
         faces_t = faces_t[:, [0, 2, 1]]
         normals = -normals
     colors, seen_frac = vertex_colors(verts_t, normals, depth, K, E, images, masks,
-                                      vis_tol=4 * voxel)
+                                      vis_tol=4 * voxel, dist=dist)
     report = {
         "views": int(depth.shape[0]), "fused_points": int(len(pts)), "grid": list(occ.shape),
         "voxel_size": voxel, "vertices": int(len(verts_t)), "faces": int(len(faces_t)),

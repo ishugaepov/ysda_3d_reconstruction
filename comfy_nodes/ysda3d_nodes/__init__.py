@@ -120,17 +120,13 @@ class YSDAReconstructMesh:
         g = da3_geometry
         if g.get("mode") != "multiview" or "extrinsics" not in g:
             raise ValueError("needs multi-view DA3 geometry (camera poses); use YSDA Depth Anything 3 Multiview")
-        depth = g["depth"].float().cpu()
+        depth, K, E, dist = _geometry_cameras(g)
         images = g["image"].float().cpu()
         S, H, W = depth.shape
-        masks = object_mask.float().cpu()
-        if masks.shape[-2:] != (H, W):
-            masks = torch.nn.functional.interpolate(masks[:, None], size=(H, W), mode="bilinear")[:, 0]
-        if valid_mask is not None:
-            masks = masks * valid_mask.float().cpu()
-        res = int(g.get("ysda_process_res", 504))
-        K = recon.rescale_intrinsics(g["intrinsics"][0].cpu(), recon.da3_processing_size(H, W, res), (H, W))
-        E = g["extrinsics"][0].float().cpu()
+        if object_mask.shape[0] != S:
+            raise ValueError(f"{object_mask.shape[0]} masks for {S} views: after COLMAP refinement, use the "
+                             "refine node's object_mask/valid_mask outputs (it drops unregistered photos)")
+        masks = _fit_masks(object_mask, H, W, valid_mask)
         conf = g.get("confidence")
         conf = conf.float().cpu() if conf is not None else None
 
@@ -139,14 +135,14 @@ class YSDAReconstructMesh:
 
         verts, faces, colors, report = recon.reconstruct(
             depth, K, E, images, masks, surface_fn, res=voxel_resolution, depth_tol=depth_tolerance,
-            max_violations=max_violations, conf=conf)
+            max_violations=max_violations, conf=conf, dist=dist)
 
         idx = sorted(set(np.linspace(0, S - 1, min(S, 6)).round().astype(int).tolist()))
-        tiles = [torch.cat([images[i], torch.from_numpy(render_points(verts, colors, K[i], E[i], (H, W)))], 0)
-                 for i in idx]
+        tiles = [torch.cat([images[i], torch.from_numpy(render_points(
+            verts, colors, K[i], E[i], (H, W), k1=recon._k1(dist, i)))], 0) for i in idx]
         preview = torch.cat(tiles, 1)[None]
 
-        sil, ious = diagnostics.silhouette_check(verts, faces, K, E, masks)
+        sil, ious = diagnostics.silhouette_check(verts, faces, K, E, masks, dist=dist)
         report["silhouette_iou_mean"] = round(float(np.mean(ious)), 3)
         report["silhouette_iou_per_view"] = ious
 
@@ -155,11 +151,16 @@ class YSDAReconstructMesh:
 
 
 def _geometry_cameras(g):
+    """depth (S,H,W), K on the canvas (S,3,3), E world→camera (S,3,4), k1 (S,) or None."""
     depth = g["depth"].float().cpu()
     S, H, W = depth.shape
-    res = int(g.get("ysda_process_res", 504))
-    K = recon.rescale_intrinsics(g["intrinsics"][0].cpu(), recon.da3_processing_size(H, W, res), (H, W))
-    return depth, K, g["extrinsics"][0].float().cpu()
+    if g.get("ysda_intrinsics_canvas"):
+        K = g["intrinsics"][0].float().cpu()
+    else:
+        res = int(g.get("ysda_process_res", 504))
+        K = recon.rescale_intrinsics(g["intrinsics"][0].cpu(), recon.da3_processing_size(H, W, res), (H, W))
+    dist = g.get("ysda_k1")
+    return depth, K, g["extrinsics"][0].float().cpu(), (dist.float().cpu() if dist is not None else None)
 
 
 def _fit_masks(masks, H, W, valid_mask=None):
@@ -244,11 +245,12 @@ class YSDACrossViewConsistency:
 
     def run(self, da3_geometry, object_mask, rel_tolerance, valid_mask=None):
         from comfy_api.latest._util.geometry_types import File3D
-        depth, K, E = _geometry_cameras(da3_geometry)
+        depth, K, E, dist = _geometry_cameras(da3_geometry)
         S, H, W = depth.shape
         images = da3_geometry["image"].float().cpu()
         keep = _fit_masks(object_mask, H, W, valid_mask) >= 0.5
-        tiles, stats, (pts, cols) = diagnostics.consistency_check(depth, K, E, images, keep, rel_tol=rel_tolerance)
+        tiles, stats, (pts, cols) = diagnostics.consistency_check(depth, K, E, images, keep, rel_tol=rel_tolerance,
+                                                                  dist=dist)
         out_dir = os.path.join(folder_paths.get_output_directory(), "ysda", "diagnostics")
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, "fused_points.ply")
@@ -260,7 +262,64 @@ class YSDACrossViewConsistency:
         return tiles, json.dumps(summary, indent=1), File3D(path)
 
 
+class YSDARefineCamerasCOLMAP:
+    """v1: replace DA3's cameras with COLMAP structure-from-motion on the full-resolution photos."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "da3_geometry": ("DA3_GEOMETRY",),
+            "object_mask": ("MASK",),
+            "valid_mask": ("MASK",),
+            "names": ("STRING", {"forceInput": True, "tooltip": "names output of YSDA Load Image Folder"}),
+            "folder": (_input_subfolders(), {"tooltip": "Same folder as in YSDA Load Image Folder"}),
+            "max_side": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64,
+                                 "tooltip": "Must equal max_side of YSDA Load Image Folder"}),
+            "sfm_max_side": ("INT", {"default": 1600, "min": 640, "max": 4096, "step": 64,
+                                     "tooltip": "Resolution COLMAP matches features at"}),
+            "min_points": ("INT", {"default": 200, "min": 0, "max": 5000,
+                                   "tooltip": "Reject photos registered with fewer triangulated points"}),
+            "drop_unregistered": ("BOOLEAN", {"default": True,
+                                              "tooltip": "Drop photos COLMAP can't (reliably) register; "
+                                                         "otherwise they keep DA3's pose"}),
+        }}
+
+    RETURN_TYPES = ("DA3_GEOMETRY", "MASK", "MASK", "STRING")
+    RETURN_NAMES = ("da3_geometry", "object_mask", "valid_mask", "report")
+    FUNCTION = "run"
+    CATEGORY = CATEGORY
+    DESCRIPTION = ("SIFT matching + incremental SfM + bundle adjustment (pycolmap, run in a subprocess), one "
+                   "camera per lens and image size, radial distortion modelled. DA3 depth is rescaled per photo to "
+                   "match the SfM points near the object. Masks are returned for the kept photos only.")
+
+    def run(self, da3_geometry, object_mask, valid_mask, names, folder, max_side, sfm_max_side, min_points,
+            drop_unregistered):
+        from ysda3d import sfm
+        name_list = [n for n in names.splitlines() if n.strip()]
+        depth = da3_geometry["depth"]
+        S, H, W = depth.shape
+        if len(name_list) != S:
+            raise ValueError(f"{len(name_list)} names for {S} views")
+        res = int(da3_geometry.get("ysda_process_res", 504))
+        g = dict(da3_geometry)
+        g["ysda_K_canvas"] = recon.rescale_intrinsics(g["intrinsics"][0].cpu(), recon.da3_processing_size(H, W, res), (H, W))
+        root = os.path.join(folder_paths.get_input_directory(), folder)
+        work = os.path.join(folder_paths.get_temp_directory(), "ysda_sfm", folder)
+        os.makedirs(work, exist_ok=True)
+        masks = _fit_masks(object_mask, H, W, valid_mask)
+        # The worker must run with this venv's python (pycolmap lives here; sys.executable may be the base one).
+        venv_python = os.path.join(sys.prefix, "bin", "python3")
+        out, report = sfm.refine_geometry(g, name_list, [os.path.join(root, n) for n in name_list], work, max_side,
+                                          sfm_max_side=sfm_max_side, masks=masks, min_points=min_points,
+                                          drop_unregistered=drop_unregistered,
+                                          python=venv_python if os.path.exists(venv_python) else None)
+        out.pop("ysda_K_canvas", None)
+        keep = torch.tensor(out["ysda_view_index"])
+        return out, object_mask[keep], valid_mask[keep], json.dumps(report, indent=1)
+
+
 NODE_CLASS_MAPPINGS = {
+    "YSDARefineCamerasCOLMAP": YSDARefineCamerasCOLMAP,
     "YSDAMaskOverlay": YSDAMaskOverlay,
     "YSDADepthPreview": YSDADepthPreview,
     "YSDACrossViewConsistency": YSDACrossViewConsistency,
@@ -269,6 +328,7 @@ NODE_CLASS_MAPPINGS = {
     "YSDAReconstructMesh": YSDAReconstructMesh,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "YSDARefineCamerasCOLMAP": "YSDA Refine Cameras (COLMAP)",
     "YSDAMaskOverlay": "YSDA Mask Overlay (diagnostic)",
     "YSDADepthPreview": "YSDA Depth & Confidence (diagnostic)",
     "YSDACrossViewConsistency": "YSDA Cross-View Consistency (diagnostic)",

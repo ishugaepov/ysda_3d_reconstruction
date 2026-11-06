@@ -1,6 +1,7 @@
-"""Generate the ComfyUI UI-format workflow for pipeline v0 + per-stage diagnostics.
+"""Generate ComfyUI UI-format workflows with per-stage diagnostics.
 
-  python3 scripts/make_workflow.py workflows/photos_to_mesh_v0_diagnostics.ui.json
+  python3 scripts/make_workflow.py workflows/photos_to_mesh_v0_diagnostics.ui.json        # v0
+  python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_colmap.ui.json --v1        # v1: + COLMAP cameras
 """
 import json
 import sys
@@ -62,11 +63,37 @@ link(cons, 1, txt_cons, "source", "*")
 save_pc = node(14, "SaveGLB", [X2 + 620, 760], [360, 480], ["ysda/diagnostics/fused_points"], [],
                title="B4. Fused DA3 point cloud (red blobs = cameras)")
 link(cons, 2, save_pc, "mesh", "FILE_3D_PLY")
+V1 = "--v1" in sys.argv
+geo_src, geo_out, mask_src, mask_out, valid_src, valid_out = da3, 0, rmbg, 0, load, 1
+if V1:
+    # Stage B': COLMAP refinement, then the same consistency check on the refined cameras.
+    XR = X3 - 40
+    ref = node(20, "YSDARefineCamerasCOLMAP", [XR, 80], [340, 260], ["toy", 1024, 1600, 200, True],
+               [("da3_geometry", "DA3_GEOMETRY"), ("object_mask", "MASK"), ("valid_mask", "MASK"), ("report", "STRING")])
+    link(da3, 0, ref, "da3_geometry", "DA3_GEOMETRY"); link(rmbg, 0, ref, "object_mask", "MASK")
+    link(load, 1, ref, "valid_mask", "MASK"); link(load, 2, ref, "names", "STRING")
+    txt_ref = node(21, "PreviewAny", [XR, 380], [340, 420], [], [("STRING", "STRING")], title="B'. COLMAP report")
+    link(ref, 3, txt_ref, "source", "*")
+    cons2 = node(22, "YSDACrossViewConsistency", [XR, 820], [340, 100], [0.02],
+                 [("per_view", "IMAGE"), ("stats", "STRING"), ("point_cloud", "FILE_3D_PLY")])
+    link(ref, 0, cons2, "da3_geometry", "DA3_GEOMETRY"); link(ref, 1, cons2, "object_mask", "MASK")
+    link(ref, 2, cons2, "valid_mask", "MASK")
+    pv_cons2 = node(23, "PreviewImage", [XR, 960], [600, 420], [], [],
+                    title="B'3. Consistency AFTER COLMAP (compare with B3)")
+    link(cons2, 0, pv_cons2, "images", "IMAGE")
+    txt_cons2 = node(24, "PreviewAny", [XR + 620, 960], [320, 420], [], [("STRING", "STRING")],
+                     title="B'3. Consistency stats AFTER COLMAP")
+    link(cons2, 1, txt_cons2, "source", "*")
+    save_pc2 = node(25, "SaveGLB", [XR + 360, 380], [360, 460], ["ysda/diagnostics/fused_points_colmap"], [],
+                    title="B'4. Fused point cloud, COLMAP cameras")
+    link(cons2, 2, save_pc2, "mesh", "FILE_3D_PLY")
+    geo_src, geo_out, mask_src, mask_out, valid_src, valid_out = ref, 0, ref, 1, ref, 2
+    X3 = X3 + 760
 # Stage C/D: reconstruction
 rec = node(15, "YSDAReconstructMesh", [X3 + 400, 80], [320, 180], [192, 0.02, 1],
            [("mesh", "MESH"), ("preview", "IMAGE"), ("report", "STRING"), ("silhouettes", "IMAGE")])
-link(da3, 0, rec, "da3_geometry", "DA3_GEOMETRY"); link(rmbg, 0, rec, "object_mask", "MASK")
-link(load, 1, rec, "valid_mask", "MASK")
+link(geo_src, geo_out, rec, "da3_geometry", "DA3_GEOMETRY"); link(mask_src, mask_out, rec, "object_mask", "MASK")
+link(valid_src, valid_out, rec, "valid_mask", "MASK")
 pv_sil = node(16, "PreviewImage", [X3 + 400, 300], [400, 380], [], [],
               title="C. Carving vs masks (white ok, green = carved away, magenta = extra)")
 link(rec, 3, pv_sil, "images", "IMAGE")
@@ -74,7 +101,7 @@ pv_cmp = node(17, "PreviewImage", [X3 + 820, 300], [700, 380], [], [], title="D.
 link(rec, 1, pv_cmp, "images", "IMAGE")
 txt_rec = node(18, "PreviewAny", [X3 + 400, 700], [400, 360], [], [("STRING", "STRING")], title="C. Reconstruction report")
 link(rec, 2, txt_rec, "source", "*")
-save = node(19, "SaveGLB", [X3 + 820, 700], [460, 480], ["ysda/v0"], [], title="Final model (GLB)")
+save = node(19, "SaveGLB", [X3 + 820, 700], [460, 480], ["ysda/v1" if V1 else "ysda/v0"], [], title="Final model (GLB)")
 link(rec, 0, save, "mesh", "MESH")
 
 groups = [
@@ -83,7 +110,11 @@ groups = [
     {"title": "B. Depth Anything 3: cameras + depth", "bounding": [X2 - 20, 20, 1000, 1700], "color": "#b58b2a"},
     {"title": "C/D. Surface + colours", "bounding": [X3 + 380, 20, 1160, 1180], "color": "#a1309b"},
 ]
-wf = {"id": str(uuid.uuid4()), "revision": 0, "last_node_id": len(nodes), "last_link_id": len(links),
+if V1:
+    groups.append({"title": "B'. COLMAP camera refinement (v1)", "bounding": [X3 - 760 - 60, 20, 1000, 1400],
+                   "color": "#2a6b8e"})
+nodes.sort(key=lambda n: n["id"])
+wf = {"id": str(uuid.uuid4()), "revision": 0, "last_node_id": max(n["id"] for n in nodes), "last_link_id": len(links),
       "nodes": nodes, "links": links, "groups": groups, "config": {}, "extra": {}, "version": 0.4}
 json.dump(wf, open(sys.argv[1], "w"), indent=1)
 print("wrote", sys.argv[1], len(nodes), "nodes", len(links), "links")

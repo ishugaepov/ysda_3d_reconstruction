@@ -36,8 +36,10 @@ masks = torch.from_numpy(d["masks"])
 depth = torch.from_numpy(d["depth"])
 conf = torch.from_numpy(d["confidence"])
 S, H, W = depth.shape
-K = rescale_intrinsics(torch.from_numpy(d["intrinsics"]), da3_processing_size(H, W, int(d["da3_res"])), (H, W))
+K = (torch.from_numpy(d["intrinsics"]).float() if "k_canvas" in d.files else
+     rescale_intrinsics(torch.from_numpy(d["intrinsics"]), da3_processing_size(H, W, int(d["da3_res"])), (H, W)))
 E = torch.from_numpy(d["extrinsics"]).float()
+dist = torch.from_numpy(d["k1"]) if "k1" in d.files else None
 
 
 def surface_fn(vol, level, voxel, origin):
@@ -47,7 +49,7 @@ def surface_fn(vol, level, voxel, origin):
 t0 = time.time()
 verts, faces, colors, report = reconstruct(depth, K, E, images, masks, surface_fn, res=args.res,
                                            depth_tol=args.depth_tol, max_violations=args.max_violations,
-                                           conf=conf)
+                                           conf=conf, dist=dist)
 report["seconds"] = round(time.time() - t0, 1)
 print(json.dumps(report))
 save_glb(to_display(verts), faces, args.out_prefix + ".glb", vertex_colors=colors)
@@ -57,7 +59,7 @@ json.dump(report, open(args.out_prefix + "_report.json", "w"), indent=1)
 idx = [int(i) for i in args.views.split(",") if int(i) < S]
 tiles = []
 for i in idx:
-    r = render_points(verts, colors, K[i], E[i], (H, W), radius=1)
+    r = render_points(verts, colors, K[i], E[i], (H, W), radius=1, k1=float(dist[i]) if dist is not None else 0.0)
     tiles.append(np.concatenate([d["images"][i], r], 0))
 sheet = (np.concatenate(tiles, 1) * 255).clip(0, 255).astype(np.uint8)
 Image.fromarray(sheet).resize((sheet.shape[1] // 3, sheet.shape[0] // 3)).save(args.out_prefix + "_compare.jpg", quality=85)

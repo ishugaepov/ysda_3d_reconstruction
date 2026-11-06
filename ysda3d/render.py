@@ -7,13 +7,16 @@ import torch
 
 
 def render_points(verts: torch.Tensor, colors: torch.Tensor, K: torch.Tensor, E: torch.Tensor,
-                  hw: tuple[int, int], radius: int = 1, bg: float = 1.0) -> np.ndarray:
+                  hw: tuple[int, int], radius: int = 1, bg: float = 1.0, k1: float = 0.0) -> np.ndarray:
     H, W = hw
     Xc = verts @ E[:3, :3].T + E[:3, 3]
     z = Xc[:, 2]
     ok = z > 1e-6
-    u = (K[0, 0] * Xc[:, 0] / z + K[0, 2]).round().long()
-    v = (K[1, 1] * Xc[:, 1] / z + K[1, 2]).round().long()
+    p = Xc[:, :2] / z.clamp(min=1e-6)[:, None]
+    if k1:
+        p = p * (1 + k1 * (p * p).sum(-1, keepdim=True))
+    u = (K[0, 0] * p[:, 0] + K[0, 2]).round().long()
+    v = (K[1, 1] * p[:, 1] + K[1, 2]).round().long()
     z, u, v, c = z[ok].numpy(), u[ok].numpy(), v[ok].numpy(), colors[ok].numpy()
     zbuf = np.full((H, W), np.inf, np.float32)
     img = np.full((H, W, 3), bg, np.float32)

@@ -19,3 +19,4 @@ Every iteration or experiment gets an entry, **including failures and dead ends*
 | [0002](0002_toy-dataset.md) | 2026-11-04 | Reference dataset: plush rocket toy (21 photos) | done | Good capture; mixed lenses/EXIF rotation and fuzzy fur are the main challenges |
 | [0003](0003_pipeline-v0.md) | 2026-11-04 | Pipeline v0: masks + DA3 + voxel carving + vertex colours | done | Works on the toy: right shape and colour placement, blobby; fixed DA3 OOM (attention) and intrinsics scale |
 | [0004](0004_diagnostics.md) | 2026-11-06 | Per-stage diagnostics vs KIRI/Polycam | done | Bottleneck = DA3 cross-view inconsistency (~1.8%, no DA3 setting fixes it); carving shaves, averaging blurs → next: bundle adjustment |
+| [0005](0005_v1-colmap-cameras.md) | 2026-11-06 | v1: COLMAP SfM cameras (+ distortion, near-object depth scale, registration checks) | done | IoU 0.813 → 0.895 (strict hull 0.956), face much sharper; 17/21 photos kept; next: mesh-based visibility for colours |

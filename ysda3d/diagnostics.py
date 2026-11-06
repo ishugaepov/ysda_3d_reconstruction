@@ -31,7 +31,8 @@ def mask_overlay(images: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
     return out
 
 
-def consistency_check(depth, K, E, images, keep, stride: int = 3, rel_tol: float = 0.02, max_points=600_000):
+def consistency_check(depth, K, E, images, keep, stride: int = 3, rel_tol: float = 0.02, max_points=600_000,
+                      dist=None):
     """Project the masked points of all OTHER views into each view and compare with that view.
 
     With perfect poses and depth, other views' points land exactly on this view's object, at the
@@ -43,7 +44,7 @@ def consistency_check(depth, K, E, images, keep, stride: int = 3, rel_tol: float
     S, H, W = depth.shape
     pts, cols, owner = [], [], []
     for j in range(S):
-        X, (v, u) = recon.unproject(depth[j], K[j], E[j], keep[j], stride)
+        X, (v, u) = recon.unproject(depth[j], K[j], E[j], keep[j], stride, recon._k1(dist, j))
         pts.append(X); cols.append(images[j][v, u]); owner.append(torch.full((len(X),), j))
     pts, cols, owner = torch.cat(pts), torch.cat(cols), torch.cat(owner)
     if len(pts) > max_points:
@@ -55,8 +56,9 @@ def consistency_check(depth, K, E, images, keep, stride: int = 3, rel_tol: float
         P = pts[others]
         Xc = P @ E[i][:3, :3].T + E[i][:3, 3]
         # Depth image of the other views' points (as colours = depth), via the splat renderer.
-        zimg = render_points(P, Xc[:, 2:3].repeat(1, 3), K[i], E[i], (H, W), radius=1, bg=np.inf)[..., 0]
-        cimg = render_points(P, cols[others], K[i], E[i], (H, W), radius=1, bg=1.0)
+        k1 = recon._k1(dist, i)
+        zimg = render_points(P, Xc[:, 2:3].repeat(1, 3), K[i], E[i], (H, W), radius=1, bg=np.inf, k1=k1)[..., 0]
+        cimg = render_points(P, cols[others], K[i], E[i], (H, W), radius=1, bg=1.0, k1=k1)
         zimg = torch.from_numpy(zimg)
         both = keep[i] & torch.isfinite(zimg)
         rel = ((zimg - depth[i]).abs() / depth[i].clamp(min=1e-6))
@@ -72,7 +74,7 @@ def consistency_check(depth, K, E, images, keep, stride: int = 3, rel_tol: float
     return torch.stack(tiles), stats, (pts, cols)
 
 
-def silhouette_check(verts, faces, K, E, masks, n_samples=400_000):
+def silhouette_check(verts, faces, K, E, masks, n_samples=400_000, dist=None):
     """Compare the reconstructed shape's silhouette with each mask.
 
     Overlay: white = both, green = in mask but carved away (lost volume),
@@ -88,7 +90,7 @@ def silhouette_check(verts, faces, K, E, masks, n_samples=400_000):
     ones = torch.ones(len(P), 3)
     out, ious = [], []
     for i in range(S):
-        sil = torch.from_numpy(render_points(P, ones, K[i], E[i], (H, W), radius=2, bg=0.0))[..., 0] > 0.5
+        sil = torch.from_numpy(render_points(P, ones, K[i], E[i], (H, W), radius=2, bg=0.0, k1=recon._k1(dist, i)))[..., 0] > 0.5
         sil = (-F.max_pool2d(-F.max_pool2d(sil.float()[None, None], 5, 1, 2), 5, 1, 2))[0, 0] > 0.5  # close holes
         m = masks[i] >= 0.5
         inter, union = (sil & m).sum(), (sil | m).sum()
