@@ -17,3 +17,4 @@ Every iteration or experiment gets an entry, **including failures and dead ends*
 |---|---|---|---|---|
 | [0001](0001_environment-setup.md) | 2026-11-02 | Environment: ComfyUI + comfy-mcp + DA3 on Mac | done | Works; DA3 must run in fp32 on MPS (fp16 crashes the server) |
 | [0002](0002_toy-dataset.md) | 2026-11-04 | Reference dataset: plush rocket toy (21 photos) | done | Good capture; mixed lenses/EXIF rotation and fuzzy fur are the main challenges |
+| [0003](0003_pipeline-v0.md) | 2026-11-04 | Pipeline v0: masks + DA3 + voxel carving + vertex colours | done | Works on the toy: right shape and colour placement, blobby; fixed DA3 OOM (attention) and intrinsics scale |
