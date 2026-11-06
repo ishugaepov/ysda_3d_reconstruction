@@ -1,0 +1,13 @@
+# Raw data (images, meshes) is not committed; see data/README.md
+data/*/images/
+data/*/raw/
+*.ply
+*.glb
+*.obj
+*.npz
+outputs/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+.idea/
