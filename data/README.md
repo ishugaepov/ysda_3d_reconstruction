@@ -1,6 +1,12 @@
 # Data
 
-Each capture lives in `data/<name>/` and is described by its journal entry. Images are **not committed** (see `.gitignore`); keep the original source path in the entry.
+Each capture lives in `data/<name>/images/` (committed) and is described by its journal entry. Keep the original source path in the entry.
+
+**Before committing photos, strip GPS location** (phones embed it, and this repo is public). This is lossless and keeps the orientation and focal-length EXIF the pipeline needs:
+
+```bash
+python scripts/strip_gps.py data/<name>/images/*.jpeg
+```
 
 | Name | Images | Journal | Source |
 |---|---|---|---|

@@ -23,14 +23,16 @@ Constraints:
 | [02_prototype_plan.md](02_prototype_plan.md) | Detailed execution plan for the first working prototype and how to iterate on it |
 | [03_literature.md](03_literature.md) | Reading list: the math and machinery behind every stage, plus a suggested reading order |
 | [journal/](journal/README.md) | **One entry per iteration/experiment**, including failures, so we never repeat what we already tried |
-| [data/](data/README.md) | Capture datasets (images not committed) |
+| [data/](data/README.md) | Capture datasets (input photos) |
+| [models/](models/README.md) | Result GLB per iteration, for side-by-side comparison |
 
 ## Repo layout
 
 ```
 README.md, 01_roadmap.md, 02_prototype_plan.md, 03_literature.md
 journal/        experiment log (NNNN_slug.md, TEMPLATE.md, assets/)
-data/<name>/    captures; images gitignored
+data/<name>/    captures (input photos)
+models/<name>/  result GLB per iteration
 ysda3d/         pure-Python pipeline code (no ComfyUI imports)
 comfy_nodes/    thin ComfyUI wrappers around ysda3d
 workflows/      API-format and UI-format workflow JSON

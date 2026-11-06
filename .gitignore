@@ -1,8 +1,8 @@
-# Raw data (images, meshes) is not committed; see data/README.md
-data/*/images/
+# Input photos (data/*/images/) and result models (models/) ARE committed; scratch data is not.
 data/*/raw/
 *.ply
 *.glb
+!models/**/*.glb
 *.obj
 *.npz
 outputs/

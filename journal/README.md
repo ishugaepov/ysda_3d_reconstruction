@@ -8,6 +8,7 @@ Every iteration or experiment gets an entry, **including failures and dead ends*
 - Copy [`TEMPLATE.md`](TEMPLATE.md). Fill in the **hypothesis before running** and the **results/conclusion after**.
 - Record exact inputs: dataset name, workflow file, git commit, model files, and any parameters that differ from defaults.
 - Put small artifacts (contact sheets, renders, plots, metrics) in `assets/NNNN_*`. Big outputs (meshes, point clouds) stay in `~/ComfyUI-Shared/output/ysda/NNNN/` and are referenced by path.
+- Final models of an iteration go into `models/<dataset>/<version>_<method>.glb`, with a row in `models/README.md`.
 - Statuses: `planned` → `running` → `done` / `failed` / `abandoned`.
 - Add a line to the index below for every entry.
 
