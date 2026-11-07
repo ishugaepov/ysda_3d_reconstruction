@@ -122,3 +122,19 @@ The reading list is organised by pipeline stage. Each section says **what math i
 4. Waechter et al. (texturing) → Zhou & Koltun → this is our texture stage.
 5. Scott et al. survey → Krause & Golovin → FisherRF → the NBV extension.
 6. 3DGS → 2DGS → SuGaR/GOF → for when we try a splat-based appearance model.
+
+## 11. Reconstruction + generation (the v2 direction; added 2026-11-07)
+
+- ★ W. Chen, W. Chen et al. — *UniForge3D: Joint 3D Reconstruction and Generation in a Shared Anchor-Guided Space* (arXiv 2610.15357, 2026). Our v2 baseline; code `xibushu/UniForge3D`, weights CC BY-NC. Read §3 (anchor space; voxel-wise view routing) and its appendix A.1.2.
+- ★ J. Xiang et al. — *Native and Compact Structured Latents for 3D Generation* (TRELLIS.2, CVPR 2026). The generator backbone: sparse structure → shape latent → texture latent.
+- ★ J. Wang et al. — *VGGT* (CVPR 2025) and *VGGT-Ω* (2026). The reconstruction backbone UniForge3D fine-tunes.
+- O. Siméoni et al. — *DINOv3* (2025). The image features conditioning TRELLIS.2.
+- J. Chang et al. — *ReconViaGen* (ICLR 2026). Reconstruction features as generation conditions.
+- S. Lin et al. — *Mix3R* (SIGGRAPH 2026). Mixture-of-transformers joining reconstruction and generation, needing a Sim(3) between spaces.
+- Z. Huang et al. — *RecGen3D: Reconstruction-guided 3D generation in a shared canonical space* (SIGGRAPH Asia 2026).
+- J. Liu et al. — *ReconPlusGen: injecting reconstruction prior through noise inversion and modulation* (arXiv 2609.11129). Relevant to Track B (our geometry into a pretrained generator).
+- Z. Qu et al. — *UMI3D: training-free voxel-to-image cross-attention routing for unconstrained multi-image inputs* (arXiv 2607.24298). Relevant to Track B.
+- H. Sun et al. — *ROAR-3D: Routing arbitrary views* (arXiv 2605.21121).
+- B. Li et al. — *MV-SAM3D: adaptive multi-view fusion* (arXiv 2603.11633). Visibility-weighted multi-diffusion.
+- Y. Siddiqui et al. — *ShapeR: robust conditional 3D shape generation from casual captures* (arXiv 2601.11514). Real-world robustness (SLAM points, occlusions).
+- D.-Y. Li et al. — *Pixal3D: pixel-aligned 3D generation from images* (SIGGRAPH 2026). Native in ComfyUI (multi-view = turnaround views).
