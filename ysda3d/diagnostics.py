@@ -122,3 +122,31 @@ def write_point_cloud_ply(path: str, points: torch.Tensor, colors: torch.Tensor,
               "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n")
     with open(path, "wb") as f:
         f.write(header.encode()); f.write(rec.tobytes())
+
+
+def photometric_check(verts, faces, colors, K, E, images, masks, views, dist=None, n_samples=2_000_000):
+    """Render the vertex-coloured mesh into `views` and compare with the photos inside the mask.
+
+    Returns per-view {psnr, coverage} (coverage = fraction of mask pixels the render covers) and
+    tiles [photo | render | |error|×4] for inspection. Use held-out views for an honest number.
+    """
+    P, C = recon.surface_samples(verts, faces, n_samples, colors)
+    S, H, W = masks.shape
+    out, tiles = [], []
+    for i in views:
+        k1 = recon._k1(dist, i)
+        zb = recon.zbuffer(P, K[i], E[i], (H, W), k1, fill=0)
+        img = torch.from_numpy(render_points(P, C, K[i], E[i], (H, W), radius=1, bg=1.0, k1=k1))
+        cov = torch.from_numpy(render_points(P, torch.ones_like(C), K[i], E[i], (H, W), radius=1, bg=0.0, k1=k1))[..., 0] > 0.5
+        m = (masks[i] >= 0.5) & cov
+        mse = float(((img - images[i]) ** 2)[m].mean()) if m.any() else float("nan")
+        psnr = 10 * np.log10(1.0 / max(mse, 1e-10))
+        # Full-mask PSNR: every object pixel counts; uncovered ones are compared against the white
+        # background, so holes and shrinkage are penalised. Comparable across methods.
+        full = masks[i] >= 0.5
+        mse_full = float(((img - images[i]) ** 2)[full].mean()) if full.any() else float("nan")
+        out.append({"view": int(i), "psnr": round(psnr, 2), "psnr_full_mask": round(10 * np.log10(1.0 / max(mse_full, 1e-10)), 2),
+                    "coverage": round(float(m.sum()) / max(1, int((masks[i] >= 0.5).sum())), 3)})
+        err = ((img - images[i]).abs() * 4).clamp(0, 1) * m[..., None]
+        tiles.append(torch.cat([images[i], img, err], 1))
+    return out, torch.stack(tiles)

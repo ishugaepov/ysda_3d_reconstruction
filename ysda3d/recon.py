@@ -170,10 +170,58 @@ def largest_component(verts: np.ndarray, faces: np.ndarray):
     return verts[used], remap[faces]
 
 
+def surface_samples(verts: torch.Tensor, faces: torch.Tensor, n: int, values: torch.Tensor | None = None,
+                    seed: int = 0):
+    """Area-weighted random points on the mesh, plus per-vertex `values` interpolated barycentrically."""
+    g = torch.Generator().manual_seed(seed)
+    tri = verts[faces]
+    area = torch.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0], dim=-1).norm(dim=-1)
+    fi = torch.multinomial(area / area.sum(), n, replacement=True, generator=g)
+    r1, r2 = torch.rand(n, generator=g).sqrt(), torch.rand(n, generator=g)
+    w = torch.stack([1 - r1, r1 * (1 - r2), r1 * r2], -1)
+    P = (tri[fi] * w[..., None]).sum(1)
+    V = (values[faces[fi]] * w[..., None]).sum(1) if values is not None else None
+    return P, V
+
+
+def zbuffer(points: torch.Tensor, K: torch.Tensor, E: torch.Tensor, hw, k1: float = 0.0, fill: int = 1):
+    """Nearest depth per pixel of a dense point set (a cheap mesh rasteriser); inf where empty.
+
+    `fill` iterations of a 3x3 min-filter close the small gaps between splatted samples.
+    """
+    H, W = hw
+    uv, z = project(points, K, E, k1)
+    u, v = uv[:, 0].round().long(), uv[:, 1].round().long()
+    ok = (z > 0) & (u >= 0) & (u < W) & (v >= 0) & (v < H)
+    zb = torch.full((H * W,), float("inf"))
+    zb.scatter_reduce_(0, (v[ok] * W + u[ok]), z[ok], reduce="amin")
+    zb = zb.view(H, W)
+    for _ in range(fill):
+        big = torch.where(torch.isfinite(zb), zb, torch.full_like(zb, 1e9))
+        mn = -F.max_pool2d(-big[None, None], 3, 1, 1)[0, 0]
+        zb = torch.where(torch.isfinite(zb), zb, torch.where(mn < 1e9, mn, zb))
+    return zb
+
+
+def mesh_depth_maps(verts, faces, K, E, hw, dist=None, n_samples: int = 2_000_000):
+    """Per-view depth of the reconstructed mesh itself (S,H,W), for visibility tests."""
+    P, _ = surface_samples(verts, faces, n_samples)
+    return torch.stack([zbuffer(P, K[i], E[i], hw, _k1(dist, i)) for i in range(len(K))])
+
+
+def erode_masks(masks: torch.Tensor, px: int) -> torch.Tensor:
+    if px <= 0:
+        return masks
+    m = (masks >= 0.5).float()[:, None]
+    return (-F.max_pool2d(-m, 2 * px + 1, 1, px))[:, 0]
+
+
 def vertex_colors(verts, normals, depth, K, E, images, masks, vis_tol: float, power: float = 2.0, dist=None):
     """Colour each vertex from the views that see it, weighted by how frontally they see it.
 
-    Visible = projects inside the mask and lies within vis_tol of that view's observed depth.
+    Visible = projects inside the mask and lies within vis_tol of `depth` at that pixel. `depth` is
+    either DA3's depth (v0/v1) or the mesh's own z-buffer (v1.1, `mesh_depth_maps`), which makes the
+    test consistent with the surface being coloured. Higher `power` → closer to "best view only".
     Vertices no view sees get the colour of the nearest coloured vertex.
     """
     centers = camera_centers(E)
@@ -206,7 +254,8 @@ def opencv_to_gltf(v: torch.Tensor) -> torch.Tensor:
 
 def reconstruct(depth, K, E, images, masks, surface_fn, res: int = 192, depth_tol: float = 0.02,
                 max_violations: int = 1, conf=None, conf_quantile: float = 0.1, smooth_iters: int = 1,
-                dist=None, log=print):
+                dist=None, visibility: str = "da3", color_power: float = 2.0, mask_erode_px: int = 0,
+                log=print):
     """Full v0: returns (verts in DA3 world space (V,3), faces (F,3), colors (V,3), report dict)."""
     keep = masks >= 0.5
     if conf is not None:
@@ -233,8 +282,14 @@ def reconstruct(depth, K, E, images, masks, surface_fn, res: int = 192, depth_to
     if ((verts_t - verts_t.mean(0)) * normals).sum() < 0:
         faces_t = faces_t[:, [0, 2, 1]]
         normals = -normals
-    colors, seen_frac = vertex_colors(verts_t, normals, depth, K, E, images, masks,
-                                      vis_tol=4 * voxel, dist=dist)
+    S, H, W = depth.shape
+    if visibility == "mesh":
+        vis_depth, vis_tol = mesh_depth_maps(verts_t, faces_t, K, E, (H, W), dist), 1.5 * voxel
+    else:
+        vis_depth, vis_tol = depth, 4 * voxel
+    colors, seen_frac = vertex_colors(verts_t, normals, vis_depth, K, E, images,
+                                      erode_masks(masks, mask_erode_px), vis_tol=vis_tol,
+                                      power=color_power, dist=dist)
     report = {
         "views": int(depth.shape[0]), "fused_points": int(len(pts)), "grid": list(occ.shape),
         "voxel_size": voxel, "vertices": int(len(verts_t)), "faces": int(len(faces_t)),

@@ -114,7 +114,8 @@ class YSDAReconstructMesh:
     DESCRIPTION = ("v0 reconstruction: voxel carving with masks + DA3 depth, surface nets, vertex colours "
                    "blended from the photos that see each vertex. Preview: photos (top) vs. renders (bottom).")
 
-    def run(self, da3_geometry, object_mask, voxel_resolution, depth_tolerance, max_violations, valid_mask=None):
+    def run(self, da3_geometry, object_mask, voxel_resolution, depth_tolerance, max_violations, valid_mask=None,
+            visibility="da3", color_power=2.0, mask_erode_px=0):
         from comfy_extras.nodes_gaussian_splat import _surface_nets
 
         g = da3_geometry
@@ -135,7 +136,8 @@ class YSDAReconstructMesh:
 
         verts, faces, colors, report = recon.reconstruct(
             depth, K, E, images, masks, surface_fn, res=voxel_resolution, depth_tol=depth_tolerance,
-            max_violations=max_violations, conf=conf, dist=dist)
+            max_violations=max_violations, conf=conf, dist=dist, visibility=visibility,
+            color_power=color_power, mask_erode_px=mask_erode_px)
 
         idx = sorted(set(np.linspace(0, S - 1, min(S, 6)).round().astype(int).tolist()))
         tiles = [torch.cat([images[i], torch.from_numpy(render_points(
@@ -170,6 +172,29 @@ def _fit_masks(masks, H, W, valid_mask=None):
     if valid_mask is not None:
         masks = masks * valid_mask.float().cpu()
     return masks
+
+
+class YSDAReconstructMeshV11(YSDAReconstructMesh):
+    """v1.1: colour visibility from the reconstructed mesh itself (z-buffer), looser depth carving."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        t = YSDAReconstructMesh.INPUT_TYPES()
+        t["required"]["depth_tolerance"] = ("FLOAT", {"default": 0.05, "min": 0.0, "max": 10.0, "step": 0.005,
+                                                       "tooltip": "Fraction of object size. 0.05 = v1.1 default; "
+                                                                  ">= 1 disables the depth test (pure visual hull)"})
+        t["required"]["visibility"] = (["mesh", "da3"], {"default": "mesh",
+                                       "tooltip": "mesh: vertex visible if frontmost in the mesh's own z-buffer (v1.1); "
+                                                  "da3: compare with DA3 depth (v0/v1)"})
+        t["required"]["color_power"] = ("FLOAT", {"default": 2.0, "min": 0.0, "max": 64.0, "step": 0.5,
+                                                  "tooltip": "View weight = cos(angle)^power. Very high values hurt (journal 0007)"})
+        t["required"]["mask_erode_px"] = ("INT", {"default": 0, "min": 0, "max": 20,
+                                                 "tooltip": "Ignore colour samples within this many px of the mask edge"})
+        return t
+
+    DESCRIPTION = ("v1.1: like v1, but colours use visibility from the mesh's own z-buffer (consistent with the "
+                   "surface being coloured) and carving uses a looser DA3-depth tolerance. On the toy: held-out "
+                   "full-mask PSNR 13.7 → 17.4 dB, silhouette IoU 0.88 → 0.92 (journal 0007).")
 
 
 class YSDAMaskOverlay:
@@ -319,6 +344,7 @@ class YSDARefineCamerasCOLMAP:
 
 
 NODE_CLASS_MAPPINGS = {
+    "YSDAReconstructMeshV11": YSDAReconstructMeshV11,
     "YSDARefineCamerasCOLMAP": YSDARefineCamerasCOLMAP,
     "YSDAMaskOverlay": YSDAMaskOverlay,
     "YSDADepthPreview": YSDADepthPreview,
@@ -328,6 +354,7 @@ NODE_CLASS_MAPPINGS = {
     "YSDAReconstructMesh": YSDAReconstructMesh,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "YSDAReconstructMeshV11": "YSDA Reconstruct Mesh (v1.1)",
     "YSDARefineCamerasCOLMAP": "YSDA Refine Cameras (COLMAP)",
     "YSDAMaskOverlay": "YSDA Mask Overlay (diagnostic)",
     "YSDADepthPreview": "YSDA Depth & Confidence (diagnostic)",

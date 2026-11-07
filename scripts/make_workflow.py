@@ -2,6 +2,7 @@
 
   python3 scripts/make_workflow.py workflows/photos_to_mesh_v0_diagnostics.ui.json        # v0
   python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_colmap.ui.json --v1        # v1: + COLMAP cameras
+  python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_1.ui.json --v11            # v1.1: + mesh visibility
 """
 import json
 import sys
@@ -63,7 +64,8 @@ link(cons, 1, txt_cons, "source", "*")
 save_pc = node(14, "SaveGLB", [X2 + 620, 760], [360, 480], ["ysda/diagnostics/fused_points"], [],
                title="B4. Fused DA3 point cloud (red blobs = cameras)")
 link(cons, 2, save_pc, "mesh", "FILE_3D_PLY")
-V1 = "--v1" in sys.argv
+V11 = "--v11" in sys.argv
+V1 = "--v1" in sys.argv or V11
 geo_src, geo_out, mask_src, mask_out, valid_src, valid_out = da3, 0, rmbg, 0, load, 1
 if V1:
     # Stage B': COLMAP refinement, then the same consistency check on the refined cameras.
@@ -90,7 +92,8 @@ if V1:
     geo_src, geo_out, mask_src, mask_out, valid_src, valid_out = ref, 0, ref, 1, ref, 2
     X3 = X3 + 760
 # Stage C/D: reconstruction
-rec = node(15, "YSDAReconstructMesh", [X3 + 400, 80], [320, 180], [192, 0.02, 1],
+rec = node(15, "YSDAReconstructMeshV11" if V11 else "YSDAReconstructMesh", [X3 + 400, 80], [320, 260 if V11 else 180],
+           [192, 0.05, 1, "mesh", 2.0, 0] if V11 else [192, 0.02, 1],
            [("mesh", "MESH"), ("preview", "IMAGE"), ("report", "STRING"), ("silhouettes", "IMAGE")])
 link(geo_src, geo_out, rec, "da3_geometry", "DA3_GEOMETRY"); link(mask_src, mask_out, rec, "object_mask", "MASK")
 link(valid_src, valid_out, rec, "valid_mask", "MASK")
@@ -101,7 +104,7 @@ pv_cmp = node(17, "PreviewImage", [X3 + 820, 300], [700, 380], [], [], title="D.
 link(rec, 1, pv_cmp, "images", "IMAGE")
 txt_rec = node(18, "PreviewAny", [X3 + 400, 700], [400, 360], [], [("STRING", "STRING")], title="C. Reconstruction report")
 link(rec, 2, txt_rec, "source", "*")
-save = node(19, "SaveGLB", [X3 + 820, 700], [460, 480], ["ysda/v1" if V1 else "ysda/v0"], [], title="Final model (GLB)")
+save = node(19, "SaveGLB", [X3 + 820, 700], [460, 480], ["ysda/v1_1" if V11 else "ysda/v1" if V1 else "ysda/v0"], [], title="Final model (GLB)")
 link(rec, 0, save, "mesh", "MESH")
 
 groups = [
