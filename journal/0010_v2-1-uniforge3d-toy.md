@@ -1,7 +1,7 @@
 # 0010 — v2.1: UniForge3D on the real toy photos (K = 4, K = 8)
 
 - **Date:** 2026-11-09
-- **Status:** K = 4 done; K = 8 running (results below once finished)
+- **Status:** done
 - **Stage(s):** G (generator), input adapter
 - **Builds on:** #0009 (port), plan v2.1
 
@@ -42,12 +42,23 @@ Rows: our v1.2, UniForge3D K = 4, Polycam (same orbit): ![k4](assets/0010_v12_vs
 - the mesh is heavy (2.2M faces; the decimation target applies before the 1024 stage).
 
 ## Results — K = 8
-*(pending)*
+- **Timing:** structure 89 s, shape 512 122 s, shape 1024 653 s, texture 1014 s; **total 33 min**.
+- **Output:** 930k vertices / 3.1M faces. Model `models/toy/v2_uniforge3d_k8.glb`.
 
-## Conclusion (so far)
+K = 4 (top) vs K = 8 (bottom): ![k8](assets/0010_uniforge3d_k4_vs_k8.jpg)
+
+- **More photo-faithful appearance with K = 8:**
+  - the face plate is grey satin (as in reality; K = 4 made it white);
+  - fur texture is visible on the blue body;
+  - the feet are more complete.
+- **Face features slightly softer** than K = 4 (more views to reconcile).
+- Shape essentially the same.
+- So the per-voxel routing does use the extra views. The model was trained with 4 views, but 8 real views still help appearance.
+
+## Conclusion
 UniForge3D gives the shape and completeness that pure reconstruction couldn't, and it works on real photos with our masks. Appearance faithfulness is the gap, which is plan v2.3 (re-texture observed regions from the registered photos).
 
 ## Next
-1. K = 8 comparison and anchor ablation.
+1. Anchor ablation; K = all (21) to test the limit (memory/time).
 2. v2.2: register the UniForge3D mesh into the COLMAP frame (silhouette / point-map alignment), then held-out evaluation with the same protocol as 0007/0008.
 3. Fix port defects: hole filling (trimesh or our own), speckle filtering, final decimation to ~300k faces.
