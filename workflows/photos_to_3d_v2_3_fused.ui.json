@@ -1,8 +1,8 @@
 {
- "id": "60003cfc-afc6-49c4-933d-b4beac41072e",
+ "id": "87ff3d6a-34fd-4ecc-bac3-8832e01a66d0",
  "revision": 0,
- "last_node_id": 17,
- "last_link_id": 27,
+ "last_node_id": 19,
+ "last_link_id": 29,
  "nodes": [
   {
    "id": 1,
@@ -44,7 +44,7 @@
      "links": [
       12,
       16,
-      24
+      26
      ]
     }
    ],
@@ -318,21 +318,21 @@
      "name": "da3_geometry",
      "type": "DA3_GEOMETRY",
      "links": [
-      21
+      23
      ]
     },
     {
      "name": "object_mask",
      "type": "MASK",
      "links": [
-      22
+      24
      ]
     },
     {
      "name": "valid_mask",
      "type": "MASK",
      "links": [
-      23
+      25
      ]
     },
     {
@@ -570,7 +570,7 @@
    "type": "YSDAFitGeneratedMesh",
    "pos": [
     1680,
-    80
+    310
    ],
    "size": [
     380,
@@ -583,27 +583,27 @@
     {
      "name": "mesh",
      "type": "MESH",
-     "link": 20
+     "link": 22
     },
     {
      "name": "da3_geometry",
      "type": "DA3_GEOMETRY",
-     "link": 21
+     "link": 23
     },
     {
      "name": "object_mask",
      "type": "MASK",
-     "link": 22
+     "link": 24
     },
     {
      "name": "valid_mask",
      "type": "MASK",
-     "link": 23
+     "link": 25
     },
     {
      "name": "names",
      "type": "YSDA_NAMES",
-     "link": 24
+     "link": 26
     }
    ],
    "outputs": [
@@ -611,21 +611,21 @@
      "name": "mesh",
      "type": "MESH",
      "links": [
-      27
+      29
      ]
     },
     {
      "name": "preview",
      "type": "IMAGE",
      "links": [
-      25
+      27
      ]
     },
     {
      "name": "report",
      "type": "STRING",
      "links": [
-      26
+      28
      ]
     }
    ],
@@ -644,7 +644,7 @@
    "type": "PreviewImage",
    "pos": [
     1680,
-    340
+    570
    ],
    "size": [
     760,
@@ -657,7 +657,7 @@
     {
      "name": "images",
      "type": "IMAGE",
-     "link": 25
+     "link": 27
     }
    ],
    "outputs": [],
@@ -672,7 +672,7 @@
    "type": "PreviewAny",
    "pos": [
     1680,
-    740
+    970
    ],
    "size": [
     360,
@@ -685,7 +685,7 @@
     {
      "name": "source",
      "type": "*",
-     "link": 26
+     "link": 28
     }
    ],
    "outputs": [
@@ -706,7 +706,7 @@
    "type": "SaveGLB",
    "pos": [
     2060,
-    740
+    970
    ],
    "size": [
     480,
@@ -719,7 +719,7 @@
     {
      "name": "mesh",
      "type": "MESH",
-     "link": 27
+     "link": 29
     }
    ],
    "outputs": [],
@@ -730,6 +730,88 @@
     "ysda/v2_3"
    ],
    "title": "Final model (GLB, upright)"
+  },
+  {
+   "id": 18,
+   "type": "YSDARepairGeneratedMesh",
+   "pos": [
+    1680,
+    80
+   ],
+   "size": [
+    380,
+    200
+   ],
+   "flags": {},
+   "order": 18,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "mesh",
+     "type": "MESH",
+     "link": 20
+    }
+   ],
+   "outputs": [
+    {
+     "name": "mesh",
+     "type": "MESH",
+     "links": [
+      22
+     ]
+    },
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": [
+      21
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "YSDARepairGeneratedMesh"
+   },
+   "widgets_values": [
+    512,
+    1.0,
+    1.0,
+    true
+   ],
+   "title": "F0. Repair generated mesh (close holes + open bottom)"
+  },
+  {
+   "id": 19,
+   "type": "PreviewAny",
+   "pos": [
+    2080,
+    80
+   ],
+   "size": [
+    360,
+    200
+   ],
+   "flags": {},
+   "order": 19,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "source",
+     "type": "*",
+     "link": 21
+    }
+   ],
+   "outputs": [
+    {
+     "name": "STRING",
+     "type": "STRING",
+     "links": []
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "PreviewAny"
+   },
+   "widgets_values": [],
+   "title": "F0. Repair report"
   }
  ],
  "links": [
@@ -889,12 +971,28 @@
    20,
    12,
    1,
-   14,
+   18,
    0,
    "MESH"
   ],
   [
    21,
+   18,
+   1,
+   19,
+   0,
+   "*"
+  ],
+  [
+   22,
+   18,
+   0,
+   14,
+   0,
+   "MESH"
+  ],
+  [
+   23,
    8,
    0,
    14,
@@ -902,7 +1000,7 @@
    "DA3_GEOMETRY"
   ],
   [
-   22,
+   24,
    8,
    1,
    14,
@@ -910,7 +1008,7 @@
    "MASK"
   ],
   [
-   23,
+   25,
    8,
    2,
    14,
@@ -918,7 +1016,7 @@
    "MASK"
   ],
   [
-   24,
+   26,
    1,
    2,
    14,
@@ -926,7 +1024,7 @@
    "YSDA_NAMES"
   ],
   [
-   25,
+   27,
    14,
    1,
    15,
@@ -934,7 +1032,7 @@
    "IMAGE"
   ],
   [
-   26,
+   28,
    14,
    2,
    16,
@@ -942,7 +1040,7 @@
    "*"
   ],
   [
-   27,
+   29,
    14,
    0,
    17,
@@ -982,12 +1080,12 @@
    "color": "#a1309b"
   },
   {
-   "title": "F. Fusion: register + photo colours",
+   "title": "F. Fusion: repair + register + photo colours",
    "bounding": [
     1660,
     20,
     900,
-    1220
+    1460
    ],
    "color": "#2a6b8e"
   }

@@ -9,7 +9,7 @@ on an M-series Mac by injecting pure-torch stand-ins for its CUDA-only dependenc
 | FlexGEMM submanifold conv | `shims/flex_gemm/ops/spconv.py` (sorted-key hash map; fp32 matmul) |
 | FlexGEMM `grid_sample_3d` | `shims/flex_gemm/ops/grid_sample.py` (cell-centre trilinear) |
 | o-voxel `flexible_dual_grid_to_mesh` | `shims/o_voxel/convert.py` |
-| CuMesh (simplify, cleanup) | `shims/cumesh`: fast-simplification + trimesh; hole filling / remeshing skipped |
+| CuMesh (simplify, cleanup) | `shims/cumesh`: fast-simplification + trimesh; hole filling / remeshing skipped, so the output has cracks, flipped faces and an open bottom. The ComfyUI workflow repairs it downstream (YSDA Repair Generated Mesh, journal 0013) |
 | nvdiffrast UV baking | replaced: per-vertex base colour sampled from the PBR voxels |
 | `torch.device("cuda")`, autocast("cuda"), `torch.cuda.*`, `segment_reduce` | `patch.py` |
 | VGGT conditioner bf16 (autocast only on CUDA) | runs in fp32 (MPS asserts on mixed-dtype matmul) |

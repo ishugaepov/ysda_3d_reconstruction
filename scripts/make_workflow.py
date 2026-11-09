@@ -5,7 +5,7 @@
   python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_1.ui.json --v11            # v1.1: + mesh visibility
   python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_2.ui.json --v12            # v1.2: + upright output
   python3 scripts/make_workflow.py workflows/photos_to_3d_v2_uniforge3d.ui.json --v2      # v2: UniForge3D
-  python3 scripts/make_workflow.py workflows/photos_to_3d_v2_3_fused.ui.json --v23        # v2.3: + registration + photo colours
+  python3 scripts/make_workflow.py workflows/photos_to_3d_v2_3_fused.ui.json --v23        # v2.3: + repair + registration + photo colours
 """
 import json
 import sys
@@ -73,23 +73,28 @@ if "--v23" in sys.argv:
     save_gen = node(13, "SaveGLB", [X3 - 40, 900], [380, 420], ["ysda/v2_3_generated_raw"], [],
                     title="G. Raw generated model (albedo colours)")
     link(uf, 0, save_gen, "mesh", "FILE_3D_GLB")
-    # fusion
-    fit = node(14, "YSDAFitGeneratedMesh", [X3 + 380, 80], [380, 230], ["IMG_4505", "photos (v2.3)", 300],
+    # fusion: repair the generated mesh (journal 0013), then register + photo colours
+    rep = node(18, "YSDARepairGeneratedMesh", [X3 + 380, 80], [380, 200], [512, 1.0, 1.0, True],
+               [("mesh", "MESH"), ("report", "STRING")], title="F0. Repair generated mesh (close holes + open bottom)")
+    link(uf, 1, rep, "mesh", "MESH")
+    txt_rep = node(19, "PreviewAny", [X3 + 780, 80], [360, 200], [], [("STRING", "STRING")], title="F0. Repair report")
+    link(rep, 1, txt_rep, "source", "*")
+    fit = node(14, "YSDAFitGeneratedMesh", [X3 + 380, 310], [380, 230], ["IMG_4505", "photos (v2.3)", 300],
                [("mesh", "MESH"), ("preview", "IMAGE"), ("report", "STRING")],
                title="F. Fit generated mesh to photos (v2.2 registration + v2.3 photo colours)")
-    link(uf, 1, fit, "mesh", "MESH"); link(ref, 0, fit, "da3_geometry", "DA3_GEOMETRY")
+    link(rep, 0, fit, "mesh", "MESH"); link(ref, 0, fit, "da3_geometry", "DA3_GEOMETRY")
     link(ref, 1, fit, "object_mask", "MASK"); link(ref, 2, fit, "valid_mask", "MASK"); link(load, 2, fit, "names", "YSDA_NAMES")
-    pv_fit = node(15, "PreviewImage", [X3 + 380, 340], [760, 380], [], [], title="F. Photos (top) vs fused model (bottom)")
+    pv_fit = node(15, "PreviewImage", [X3 + 380, 570], [760, 380], [], [], title="F. Photos (top) vs fused model (bottom)")
     link(fit, 1, pv_fit, "images", "IMAGE")
-    txt_fit = node(16, "PreviewAny", [X3 + 380, 740], [360, 300], [], [("STRING", "STRING")], title="F. Registration report")
+    txt_fit = node(16, "PreviewAny", [X3 + 380, 970], [360, 300], [], [("STRING", "STRING")], title="F. Registration report")
     link(fit, 2, txt_fit, "source", "*")
-    save = node(17, "SaveGLB", [X3 + 760, 740], [480, 480], ["ysda/v2_3"], [], title="Final model (GLB, upright)")
+    save = node(17, "SaveGLB", [X3 + 760, 970], [480, 480], ["ysda/v2_3"], [], title="Final model (GLB, upright)")
     link(fit, 0, save, "mesh", "MESH")
     groups = [
         {"title": "0/A. Photos + masks", "bounding": [X0 - 20, 20, 820, 680], "color": "#3f789e"},
         {"title": "B. Reconstruction: DA3 + COLMAP cameras", "bounding": [X2 - 20, 20, 380, 900], "color": "#b58b2a"},
         {"title": "G. Generation: UniForge3D", "bounding": [X3 - 60, 20, 420, 1320], "color": "#a1309b"},
-        {"title": "F. Fusion: register + photo colours", "bounding": [X3 + 360, 20, 900, 1220], "color": "#2a6b8e"},
+        {"title": "F. Fusion: repair + register + photo colours", "bounding": [X3 + 360, 20, 900, 1460], "color": "#2a6b8e"},
     ]
     nodes.sort(key=lambda n: n["id"])
     wf = {"id": str(uuid.uuid4()), "revision": 0, "last_node_id": max(n["id"] for n in nodes),

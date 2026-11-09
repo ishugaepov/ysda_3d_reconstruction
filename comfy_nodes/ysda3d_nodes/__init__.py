@@ -533,13 +533,55 @@ class YSDAUniForge3D:
             raise RuntimeError(f"UniForge3D failed (exit {proc.returncode}); log {log_path}:\n{tail}")
 
 
+class YSDARepairGeneratedMesh:
+    """Hole-free, outward-wound, closed version of a generated mesh (narrow-band remesh, journal 0013)."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "mesh": ("MESH", {"tooltip": "mesh output of YSDA UniForge3D"}),
+            "resolution": ("INT", {"default": 512, "min": 256, "max": 1024, "step": 64,
+                                   "tooltip": "Grid cells along the longest side: 512 ≈ 1.9M faces, 768 ≈ 4.8M"}),
+            "band": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 3.0, "step": 0.25,
+                               "tooltip": "Offset of the new surface from the old one, in cells; "
+                                          "holes up to ~2× this wide close"}),
+            "seal": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 4.0, "step": 0.5,
+                               "tooltip": "Extra cells for capping wider gaps into the interior; layers closer "
+                                          "than ~2·(band + seal) cells merge"}),
+            "close_bottom": ("BOOLEAN", {"default": True,
+                                         "tooltip": "Cap openings that only face down (the never-photographed underside)"}),
+        }}
+
+    RETURN_TYPES = ("MESH", "STRING")
+    RETURN_NAMES = ("mesh", "report")
+    FUNCTION = "run"
+    CATEGORY = CATEGORY + "/v2"
+    DESCRIPTION = ("The Mac port of UniForge3D lacks CuMesh's hole filling + narrow-band remesh, so its mesh has "
+                   "cracks, flipped faces and an open bottom. This rebuilds the outer boundary of a thin band around "
+                   "it (surface nets), closing holes and capping the underside; colours come from the nearest "
+                   "original surface point.")
+
+    def run(self, mesh, resolution, band, seal, close_bottom):
+        import time
+        from ysda3d import meshfix
+
+        v, f = mesh.vertices[0].float().cpu(), mesh.faces[0].long().cpu()
+        c = mesh.vertex_colors[0].float().cpu()[:, :3] if mesh.vertex_colors is not None else None
+        t = time.time()
+        nv, nf, nc = meshfix.remesh_narrow_band(v, f, c, res=resolution, band=band, seal=seal,
+                                                close_bottom=close_bottom, log=lambda *a: None)
+        report = {"input": meshfix.edge_stats(f), "repaired": meshfix.edge_stats(nf),
+                  "seconds": round(time.time() - t, 1)}
+        return MESH(nv[None], nf[None], vertex_colors=nc[None] if nc is not None else None), json.dumps(report, indent=1)
+
+
 class YSDAFitGeneratedMesh:
     """v2.2 + v2.3: register a generated mesh (UniForge3D) to the COLMAP cameras and colour it from the photos."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "mesh": ("MESH", {"tooltip": "mesh output of YSDA UniForge3D"}),
+            "mesh": ("MESH", {"tooltip": "mesh output of YSDA Repair Generated Mesh (or YSDA UniForge3D)"}),
             "da3_geometry": ("DA3_GEOMETRY", {"tooltip": "from YSDA Refine Cameras (COLMAP)"}),
             "object_mask": ("MASK", {"tooltip": "object_mask output of YSDA Refine Cameras (COLMAP)"}),
             "valid_mask": ("MASK", {"tooltip": "valid_mask output of YSDA Refine Cameras (COLMAP)"}),
@@ -553,7 +595,7 @@ class YSDAFitGeneratedMesh:
     RETURN_NAMES = ("mesh", "preview", "report")
     FUNCTION = "run"
     CATEGORY = CATEGORY + "/v2"
-    DESCRIPTION = ("Culls hidden faces of the generated mesh, fits a 7-DoF similarity to the masks in all COLMAP-"
+    DESCRIPTION = ("Culls hidden faces of a raw (open) generated mesh, fits a 7-DoF similarity to the masks in all COLMAP-"
                    "registered photos (initialised from a quick v1.2 reconstruction: floor-plane up, anchor = front), "
                    "then colours visible vertices from the photos; unobserved vertices keep the generated colours "
                    "harmonised to the photo palette (journal 0012). Preview: photos (top) vs result (bottom).")
@@ -578,9 +620,13 @@ class YSDAFitGeneratedMesh:
         gc = (mesh.vertex_colors[0].float().cpu()[:, :3] if mesh.vertex_colors is not None
               else torch.full((len(gv), 3), 0.7))
         report = {}
-        gv, gf, used = meshfix.cull_hidden_faces(gv, gf, log=lambda *a: None)
-        gc = gc[used]
-        report["faces_after_cull"] = int(len(gf))
+        clean = meshfix.edge_stats(gf)["open_edges"] == 0
+        if not clean:
+            # Raw generator output: drop inner shells / buried fins (journal 0012). A repaired, closed mesh has
+            # none, and culling it would only cut holes in folds no test direction sees (journal 0013).
+            gv, gf, used = meshfix.cull_hidden_faces(gv, gf, log=lambda *a: None)
+            gc = gc[used]
+            report["faces_after_cull"] = int(len(gf))
         sn = lambda v, l, vx, o: _surface_nets(v, l, vx, o, torch.device("cpu"))  # noqa: E731
         ref_v, _, _, _ = recon.reconstruct(depth, K, E, images, masks, sn, depth_tol=0.05, max_violations=1, conf=conf,
                                            dist=dist, visibility="mesh", log=lambda *a: None)
@@ -599,11 +645,17 @@ class YSDAFitGeneratedMesh:
         P, C = recon.surface_samples(wv, gf, 3_000_000, cols)
         tiles = [torch.cat([images[i], torch.from_numpy(render_points(P, C, K[i], E[i], (H, W), radius=1,
                                                                      k1=recon._k1(dist, i)))], 0) for i in idx]
-        out = MESH(disp[None], gf[None], vertex_colors=cols[None])
+        normals = None
+        if clean:
+            if meshfix.signed_volume(disp, gf) < 0:          # keep the winding outward after the transform
+                gf = gf[:, [0, 2, 1]]
+            normals = recon.vertex_normals(disp, gf)[None]    # smooth shading in viewers
+        out = MESH(disp[None], gf[None], vertex_colors=cols[None], normals=normals)
         return out, torch.cat(tiles, 1)[None], json.dumps(report, indent=1)
 
 
 NODE_CLASS_MAPPINGS = {
+    "YSDARepairGeneratedMesh": YSDARepairGeneratedMesh,
     "YSDAFitGeneratedMesh": YSDAFitGeneratedMesh,
     "YSDAPrepareUniForge3DInputs": YSDAPrepareUniForge3DInputs,
     "YSDAUniForge3D": YSDAUniForge3D,
@@ -618,6 +670,7 @@ NODE_CLASS_MAPPINGS = {
     "YSDAReconstructMesh": YSDAReconstructMesh,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "YSDARepairGeneratedMesh": "YSDA Repair Generated Mesh (close holes)",
     "YSDAFitGeneratedMesh": "YSDA Fit Generated Mesh To Photos (v2.2 + v2.3)",
     "YSDAPrepareUniForge3DInputs": "YSDA Prepare UniForge3D Inputs (v2)",
     "YSDAUniForge3D": "YSDA UniForge3D (v2, Mac)",

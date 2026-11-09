@@ -68,9 +68,15 @@ save_glb(recon.to_display_upright(v12, R_up, floor[1] if floor else None), f12, 
 
 # --- v2.2 / v2.3: generated meshes -----------------------------------------------------------------
 for tag, path in GEN.items():
+    if os.environ.get("ONLY") and tag != os.environ["ONLY"]:
+        continue
     m = Get3DComponents.execute(File3D(os.path.join(REPO, path))).result[0]
     gv, gf, gc = m.vertices[0].float(), m.faces[0].long(), m.vertex_colors[0].float()[:, :3]
-    if os.environ.get("CULL", "1") == "1":
+    if os.environ.get("REPAIR", "0") == "1":
+        # Narrow-band remesh: closes the holes/cracks of the raw dual-grid mesh and its open bottom (journal 0013).
+        gv, gf, gc = meshfix.remesh_narrow_band(gv, gf, gc, res=int(os.environ.get("REPAIR_RES", "512")), log=print)
+        tag = tag + "_repair"
+    elif os.environ.get("CULL", "1") == "1":
         # Keep the raw (correctly placed) surface but drop faces never frontmost from any viewpoint:
         # removes inner shells / buried fins that made per-vertex photo colours noisy (journal 0012).
         gv, gf, used = meshfix.cull_hidden_faces(gv, gf, log=print)
@@ -89,7 +95,7 @@ for tag, path in GEN.items():
     results[tag + " (v2.2 registered, generated colours)"] = {**evaluate(tag + "_gen", wv, gf, gc), "registration": info}
     t0 = time.time()
     rc, obs = generated.recolour_from_photos(wv, gf, gc, t_(K), t_(E), t_(images), t_(masks), dist=t_(dist),
-                                             abs_cos=os.environ.get("CULL", "1") == "1")
+                                             abs_cos=os.environ.get("CULL", "1") == "1" or os.environ.get("REPAIR") == "1")
     results[tag + " (v2.3 photo-recoloured)"] = {**evaluate(tag + "_photo", wv, gf, rc),
                                                  "observed_fraction": round(obs, 3), "seconds": round(time.time() - t0, 1)}
     disp = recon.to_display_upright(wv, R_up, floor[1] if floor else None)
