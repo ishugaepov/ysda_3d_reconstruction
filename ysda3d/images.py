@@ -48,3 +48,27 @@ def load_folder(folder: str, max_side: int = 1024) -> tuple[np.ndarray, np.ndarr
     paths = list_images(folder)
     batch, valid = pad_to_batch([load_resized(p, max_side) for p in paths])
     return batch, valid, [os.path.basename(p) for p in paths]
+
+
+def rgba_views_from_masks(folder: str, names: list[str], masks, valid, out_dir: str, picks: list[int]) -> list[str]:
+    """Write full-resolution RGBA PNGs (photo + mask alpha) for the picked views, numbered in order.
+
+    masks/valid are the (B,H,W) arrays on the padded canvas of load_folder(); the valid region is
+    mapped back to each photo's EXIF-rotated full resolution, so the object keeps all its pixels.
+    """
+    import numpy as np
+    os.makedirs(out_dir, exist_ok=True)
+    for f in os.listdir(out_dir):
+        if f.endswith(".png"):
+            os.remove(os.path.join(out_dir, f))
+    paths = []
+    for k, i in enumerate(picks):
+        photo = ImageOps.exif_transpose(Image.open(os.path.join(folder, names[i]))).convert("RGB")
+        ys, xs = np.nonzero(np.asarray(valid[i]) > 0.5)
+        m = np.asarray(masks[i])[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+        alpha = Image.fromarray((np.clip(m, 0, 1) * 255).astype(np.uint8)).resize(photo.size, Image.BILINEAR)
+        photo.putalpha(alpha)
+        p = os.path.join(out_dir, f"{k + 1:03d}_{os.path.splitext(names[i])[0]}.png")
+        photo.save(p)
+        paths.append(p)
+    return paths

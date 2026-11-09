@@ -377,7 +377,151 @@ class YSDARefineCamerasCOLMAP:
         return out, object_mask[keep], valid_mask[keep], json.dumps(report, indent=1)
 
 
+# ----------------------------------------------------------------------------------------------
+# v2: UniForge3D (reconstruction + generation), run as a subprocess in its own venv (journal 0009)
+# ----------------------------------------------------------------------------------------------
+UNIFORGE_PYTHON = os.environ.get("YSDA_UNIFORGE_PYTHON", os.path.expanduser("~/src/uniforge3d-venv/bin/python"))
+UNIFORGE_RUNNER = os.path.join(_REPO, "v2", "uniforge_mac", "run.py")
+
+
+def _pick_views(names, views: str, k: int):
+    """Explicit comma-separated name prefixes (first = anchor), else K evenly spaced in sorted order."""
+    wanted = [v.strip() for v in views.replace("\n", ",").split(",") if v.strip()]
+    if wanted:
+        picks = []
+        for w in wanted:
+            hit = [i for i, n in enumerate(names) if n.startswith(w) or os.path.splitext(n)[0] == w]
+            if not hit:
+                raise ValueError(f"view {w!r} not found among {len(names)} photos")
+            picks.append(hit[0])
+        return picks
+    k = max(1, min(k, len(names)))
+    return sorted({int(round(x)) for x in np.linspace(0, len(names), k, endpoint=False)})
+
+
+class YSDAPrepareUniForge3DInputs:
+    """Write full-resolution RGBA views (photo + mask alpha) for UniForge3D; the first view is the anchor."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "object_mask": ("MASK", {"tooltip": "Masks from Remove Background, on the loader's canvas"}),
+            "valid_mask": ("MASK", {"tooltip": "valid_mask of YSDA Load Image Folder"}),
+            "names": ("STRING", {"forceInput": True}),
+            "folder": (_input_subfolders(), {"tooltip": "Same folder as in YSDA Load Image Folder"}),
+            "views": ("STRING", {"default": "", "multiline": False,
+                                 "tooltip": "Comma-separated photo names/prefixes, first = anchor (front of the model). "
+                                            "Empty = K photos evenly spaced in file order"}),
+            "k": ("INT", {"default": 4, "min": 1, "max": 32, "tooltip": "Number of views when 'views' is empty "
+                                                                         "(trained with 4; 8 looked more faithful, journal 0010)"}),
+        }}
+
+    RETURN_TYPES = ("STRING", "IMAGE", "STRING")
+    RETURN_NAMES = ("input_dir", "preview", "selected")
+    FUNCTION = "run"
+    CATEGORY = CATEGORY + "/v2"
+
+    def run(self, object_mask, valid_mask, names, folder, views, k):
+        name_list = [n for n in names.splitlines() if n.strip()]
+        picks = _pick_views(name_list, views, k)
+        out_dir = os.path.join(folder_paths.get_output_directory(), "ysda", "uniforge3d_inputs", folder)
+        paths = yimages.rgba_views_from_masks(os.path.join(folder_paths.get_input_directory(), folder), name_list,
+                                              object_mask.cpu().numpy(), valid_mask.cpu().numpy(), out_dir, picks)
+        from PIL import Image
+        tiles = []
+        for p in paths:
+            im = Image.open(p)
+            im.thumbnail((512, 512))
+            bg = Image.new("RGBA", (512, 512), (128, 128, 128, 255))
+            bg.alpha_composite(im, ((512 - im.width) // 2, (512 - im.height) // 2))
+            tiles.append(torch.from_numpy(np.asarray(bg.convert("RGB"), np.float32) / 255))
+        return out_dir, torch.stack(tiles), "\n".join(name_list[i] for i in picks)
+
+
+class YSDAUniForge3D:
+    """UniForge3D (joint reconstruction + generation) on Apple Silicon, as a subprocess (journal 0009/0010)."""
+
+    STAGE_WEIGHTS = {"load models": 110, "preprocess": 2, "dino": 5, "structure": 75, "shape512": 115,
+                     "coords64": 3, "shape1024": 620, "texture": 900}
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "input_dir": ("STRING", {"forceInput": True, "tooltip": "Folder of RGBA PNGs (YSDA Prepare UniForge3D Inputs)"}),
+            "mode": (["full", "preview (shape512, no colour)"], {"default": "full",
+                     "tooltip": "full ≈ 30 min for 4–8 views; preview ≈ 5 min, geometry only"}),
+            "seed": ("INT", {"default": 42, "min": 0, "max": 2 ** 31 - 1}),
+        }}
+
+    RETURN_TYPES = ("FILE_3D_GLB", "MESH", "FILE_3D_GLB", "STRING")
+    RETURN_NAMES = ("model_3d", "mesh", "shape512_3d", "report")
+    FUNCTION = "run"
+    CATEGORY = CATEGORY + "/v2"
+    DESCRIPTION = ("Runs v2/uniforge_mac/run.py in ~/src/uniforge3d-venv (override with $YSDA_UNIFORGE_PYTHON). "
+                   "Needs ~40 GB of unified memory while running; ComfyUI's loaded models are freed first.")
+
+    def run(self, input_dir, mode, seed):
+        import subprocess
+        import time
+        import comfy.model_management as mm
+        import comfy.utils
+        from comfy_api.latest._util.geometry_types import File3D
+        from comfy_extras.nodes_mesh_io import Get3DComponents
+
+        if not os.path.exists(UNIFORGE_PYTHON):
+            raise FileNotFoundError(f"UniForge3D venv python not found: {UNIFORGE_PYTHON} (see v2/uniforge_mac/README.md)")
+        preview = mode.startswith("preview")
+        out_dir = os.path.join(folder_paths.get_output_directory(), "ysda", "uniforge3d",
+                               time.strftime("%Y%m%d_%H%M%S"))
+        os.makedirs(out_dir, exist_ok=True)
+        out_glb = os.path.join(out_dir, "model.glb")
+        status_path = os.path.join(out_dir, "status.json")
+        log_path = os.path.join(out_dir, "run.log")
+        mm.unload_all_models()
+        mm.soft_empty_cache()
+
+        weights = dict(self.STAGE_WEIGHTS)
+        if preview:
+            for k in ("coords64", "shape1024", "texture"):
+                weights.pop(k)
+        total = sum(weights.values())
+        pbar = comfy.utils.ProgressBar(total)
+        cmd = [UNIFORGE_PYTHON, "-u", UNIFORGE_RUNNER, input_dir, out_glb, "--seed", str(seed),
+               "--status-json", status_path, "--stop-after", "shape512" if preview else "all"]
+        env = dict(os.environ, PYTHONPATH="", HF_HUB_OFFLINE="1")
+        with open(log_path, "w") as log:
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
+            done_w = 0
+            while proc.poll() is None:
+                time.sleep(2)
+                try:
+                    mm.throw_exception_if_processing_interrupted()
+                except Exception:
+                    proc.kill()
+                    raise
+                try:
+                    st = json.load(open(status_path))
+                    finished = {x["name"] for x in st.get("stages", [])}
+                    done_w = weights["load models"] + sum(w for n, w in weights.items() if n in finished)
+                except (FileNotFoundError, json.JSONDecodeError):
+                    pass
+                pbar.update_absolute(min(done_w, total), total)
+        tail = "\n".join(open(log_path).read().splitlines()[-25:])
+        if proc.returncode != 0:
+            raise RuntimeError(f"UniForge3D failed (exit {proc.returncode}); log {log_path}:\n{tail}")
+        st = json.load(open(status_path))
+        shape512 = st.get("shape512")
+        final = shape512 if preview else st.get("output", out_glb)
+        mesh = Get3DComponents.execute(File3D(final)).result[0]
+        report = {"mode": mode, "seed": seed, "input_dir": input_dir, "output_dir": out_dir,
+                  "stages": st.get("stages"), "total_seconds": st.get("total_seconds"),
+                  "vertices": st.get("vertices"), "faces": st.get("faces")}
+        return File3D(final), mesh, File3D(shape512), json.dumps(report, indent=1)
+
+
 NODE_CLASS_MAPPINGS = {
+    "YSDAPrepareUniForge3DInputs": YSDAPrepareUniForge3DInputs,
+    "YSDAUniForge3D": YSDAUniForge3D,
     "YSDAReconstructMeshV12": YSDAReconstructMeshV12,
     "YSDAReconstructMeshV11": YSDAReconstructMeshV11,
     "YSDARefineCamerasCOLMAP": YSDARefineCamerasCOLMAP,
@@ -389,6 +533,8 @@ NODE_CLASS_MAPPINGS = {
     "YSDAReconstructMesh": YSDAReconstructMesh,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "YSDAPrepareUniForge3DInputs": "YSDA Prepare UniForge3D Inputs (v2)",
+    "YSDAUniForge3D": "YSDA UniForge3D (v2, Mac)",
     "YSDAReconstructMeshV12": "YSDA Reconstruct Mesh (v1.2, upright)",
     "YSDAReconstructMeshV11": "YSDA Reconstruct Mesh (v1.1)",
     "YSDARefineCamerasCOLMAP": "YSDA Refine Cameras (COLMAP)",

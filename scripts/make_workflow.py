@@ -4,6 +4,7 @@
   python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_colmap.ui.json --v1        # v1: + COLMAP cameras
   python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_1.ui.json --v11            # v1.1: + mesh visibility
   python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_2.ui.json --v12            # v1.2: + upright output
+  python3 scripts/make_workflow.py workflows/photos_to_3d_v2_uniforge3d.ui.json --v2      # v2: UniForge3D
 """
 import json
 import sys
@@ -30,6 +31,51 @@ def link(src, out_idx, dst, in_name, type_):
 
 
 X0, X1, X2, X3 = 40, 420, 840, 1300
+
+if "--v2" in sys.argv:
+    # v2: photos -> masks -> RGBA views -> UniForge3D (Mac port, subprocess) -> GLB
+    load = node(1, "YSDALoadImageFolder", [X0, 80], [320, 110], ["toy", 1024],
+                [("images", "IMAGE"), ("valid_mask", "MASK"), ("names", "STRING")])
+    bgm = node(2, "LoadBackgroundRemovalModel", [X0, 260], [320, 60], ["birefnet.safetensors"],
+               [("BACKGROUND_REMOVAL", "BACKGROUND_REMOVAL")])
+    rmbg = node(3, "RemoveBackground", [X1, 80], [300, 50], [], [("mask", "MASK")])
+    link(bgm, 0, rmbg, "bg_removal_model", "BACKGROUND_REMOVAL"); link(load, 0, rmbg, "image", "IMAGE")
+    ov = node(4, "YSDAMaskOverlay", [X1, 170], [300, 70], [], [("overlay", "IMAGE")])
+    link(load, 0, ov, "images", "IMAGE"); link(rmbg, 0, ov, "mask", "MASK"); link(load, 1, ov, "valid_mask", "MASK")
+    pv_mask = node(5, "PreviewImage", [X1, 280], [380, 420], [], [], title="A. Masks (all photos)")
+    link(ov, 0, pv_mask, "images", "IMAGE")
+    prep = node(6, "YSDAPrepareUniForge3DInputs", [X2, 80], [380, 200],
+                ["toy", "IMG_4505,IMG_4509,IMG_4513,IMG_4518", 4],
+                [("input_dir", "STRING"), ("preview", "IMAGE"), ("selected", "STRING")],
+                title="G0. Views for UniForge3D (first = anchor/front; empty list = K evenly spaced)")
+    link(rmbg, 0, prep, "object_mask", "MASK"); link(load, 1, prep, "valid_mask", "MASK"); link(load, 2, prep, "names", "STRING")
+    pv_views = node(7, "PreviewImage", [X2, 320], [420, 420], [], [], title="G0. Selected RGBA views")
+    link(prep, 1, pv_views, "images", "IMAGE")
+    txt_sel = node(8, "PreviewAny", [X2, 760], [420, 160], [], [("STRING", "STRING")], title="G0. Selected photos")
+    link(prep, 2, txt_sel, "source", "*")
+    uf = node(9, "YSDAUniForge3D", [X3, 80], [360, 130], ["full", 42, "fixed"],
+              [("model_3d", "FILE_3D_GLB"), ("mesh", "MESH"), ("shape512_3d", "FILE_3D_GLB"), ("report", "STRING")],
+              title="G. UniForge3D (Mac) — full ≈ 30 min, preview ≈ 5 min")
+    link(prep, 0, uf, "input_dir", "STRING")
+    save = node(10, "SaveGLB", [X3 + 400, 80], [480, 520], ["ysda/v2_uniforge3d"], [], title="Final model (GLB)")
+    link(uf, 0, save, "mesh", "FILE_3D_GLB")
+    save512 = node(11, "SaveGLB", [X3 + 400, 640], [480, 460], ["ysda/v2_uniforge3d_shape512"], [],
+                   title="Intermediate: shape-512 geometry")
+    link(uf, 2, save512, "mesh", "FILE_3D_GLB")
+    txt = node(12, "PreviewAny", [X3, 260], [360, 520], [], [("STRING", "STRING")], title="G. Report (stage timings)")
+    link(uf, 3, txt, "source", "*")
+    groups = [
+        {"title": "0/A. Photos + masks", "bounding": [X0 - 20, 20, 820, 700], "color": "#3f789e"},
+        {"title": "G0. Input adapter (RGBA at photo resolution)", "bounding": [X2 - 20, 20, 460, 920], "color": "#8A8"},
+        {"title": "G. UniForge3D: joint reconstruction + generation", "bounding": [X3 - 20, 20, 920, 1100], "color": "#a1309b"},
+    ]
+    nodes.sort(key=lambda n: n["id"])
+    wf = {"id": str(uuid.uuid4()), "revision": 0, "last_node_id": max(n["id"] for n in nodes),
+          "last_link_id": len(links), "nodes": nodes, "links": links, "groups": groups, "config": {}, "extra": {},
+          "version": 0.4}
+    json.dump(wf, open(sys.argv[1], "w"), indent=1)
+    print("wrote", sys.argv[1], len(nodes), "nodes", len(links), "links")
+    sys.exit(0)
 # Stage 0: inputs
 load = node(1, "YSDALoadImageFolder", [X0, 80], [320, 110], ["toy", 1024],
             [("images", "IMAGE"), ("valid_mask", "MASK"), ("names", "STRING")])
