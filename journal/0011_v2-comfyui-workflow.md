@@ -27,6 +27,12 @@ YSDA Load Image Folder → Remove Background (BiRefNet) → [masks preview]
 - Prepare (auto K = 4) → views 4505, 4510, 4515, 4521. **The even spread picks the top-down shot (4521)**, so the workflow defaults to the known-good explicit list 4505, 4509, 4513, 4518. View selection from COLMAP poses is a v2.1 follow-up.
 - UniForge3D preview: **283 s** (dino 5.5 s, structure 64 s, shape 512 102 s + model loading). Native MESH with 293k vertices returned.
 
+## Bug found in Desktop (user)
+- Error: *"The value 42 for … mode is not available"*.
+- Cause: the frontend keeps a `widgets_values` slot for `forceInput` STRING inputs (`input_dir`, `names`), but the generator didn't. All widget values were shifted by one, and the COLMAP refine node in the v1/v1.1/v1.2 workflows had the same latent bug.
+- comfy-cli's validator assumes *no* slot, so the tools disagree.
+- **Fix:** node-to-node data uses **custom socket types** (`YSDA_NAMES` for photo names, `YSDA_DIR` for the input folder), which are never widgets. All workflows were regenerated.
+
 ## Next
 - Run `ysda_photos_to_3d_v2_uniforge3d` in Desktop (full mode).
 - v2.2: registration node (UniForge3D mesh → COLMAP frame) + held-out photometric evaluation, built on this workflow's MESH output.

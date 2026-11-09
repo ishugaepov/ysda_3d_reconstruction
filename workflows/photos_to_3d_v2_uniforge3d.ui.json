@@ -1,5 +1,5 @@
 {
- "id": "ef31becd-b1e1-4fd3-b39e-fcb3dc7b1e49",
+ "id": "fd49ea43-18ee-4bba-8a5e-865c62bbb340",
  "revision": 0,
  "last_node_id": 12,
  "last_link_id": 15,
@@ -38,7 +38,7 @@
     },
     {
      "name": "names",
-     "type": "STRING",
+     "type": "YSDA_NAMES",
      "links": [
       9
      ]
@@ -224,14 +224,14 @@
     },
     {
      "name": "names",
-     "type": "STRING",
+     "type": "YSDA_NAMES",
      "link": 9
     }
    ],
    "outputs": [
     {
      "name": "input_dir",
-     "type": "STRING",
+     "type": "YSDA_DIR",
      "links": [
       12
      ]
@@ -340,7 +340,7 @@
    "inputs": [
     {
      "name": "input_dir",
-     "type": "STRING",
+     "type": "YSDA_DIR",
      "link": 12
     }
    ],
@@ -548,7 +548,7 @@
    2,
    6,
    2,
-   "STRING"
+   "YSDA_NAMES"
   ],
   [
    10,
@@ -572,7 +572,7 @@
    0,
    9,
    0,
-   "STRING"
+   "YSDA_DIR"
   ],
   [
    13,

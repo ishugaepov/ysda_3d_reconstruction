@@ -42,7 +42,7 @@ class YSDALoadImageFolder:
                                  "tooltip": "Longest image side after resizing"}),
         }}
 
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_TYPES = ("IMAGE", "MASK", "YSDA_NAMES")
     RETURN_NAMES = ("images", "valid_mask", "names")
     FUNCTION = "load"
     CATEGORY = CATEGORY
@@ -330,7 +330,7 @@ class YSDARefineCamerasCOLMAP:
             "da3_geometry": ("DA3_GEOMETRY",),
             "object_mask": ("MASK",),
             "valid_mask": ("MASK",),
-            "names": ("STRING", {"forceInput": True, "tooltip": "names output of YSDA Load Image Folder"}),
+            "names": ("YSDA_NAMES", {"tooltip": "names output of YSDA Load Image Folder"}),
             "folder": (_input_subfolders(), {"tooltip": "Same folder as in YSDA Load Image Folder"}),
             "max_side": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64,
                                  "tooltip": "Must equal max_side of YSDA Load Image Folder"}),
@@ -407,7 +407,7 @@ class YSDAPrepareUniForge3DInputs:
         return {"required": {
             "object_mask": ("MASK", {"tooltip": "Masks from Remove Background, on the loader's canvas"}),
             "valid_mask": ("MASK", {"tooltip": "valid_mask of YSDA Load Image Folder"}),
-            "names": ("STRING", {"forceInput": True}),
+            "names": ("YSDA_NAMES", {"tooltip": "names output of YSDA Load Image Folder"}),
             "folder": (_input_subfolders(), {"tooltip": "Same folder as in YSDA Load Image Folder"}),
             "views": ("STRING", {"default": "", "multiline": False,
                                  "tooltip": "Comma-separated photo names/prefixes, first = anchor (front of the model). "
@@ -416,7 +416,7 @@ class YSDAPrepareUniForge3DInputs:
                                                                          "(trained with 4; 8 looked more faithful, journal 0010)"}),
         }}
 
-    RETURN_TYPES = ("STRING", "IMAGE", "STRING")
+    RETURN_TYPES = ("YSDA_DIR", "IMAGE", "STRING")
     RETURN_NAMES = ("input_dir", "preview", "selected")
     FUNCTION = "run"
     CATEGORY = CATEGORY + "/v2"
@@ -447,7 +447,7 @@ class YSDAUniForge3D:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "input_dir": ("STRING", {"forceInput": True, "tooltip": "Folder of RGBA PNGs (YSDA Prepare UniForge3D Inputs)"}),
+            "input_dir": ("YSDA_DIR", {"tooltip": "Folder of RGBA PNGs (YSDA Prepare UniForge3D Inputs)"}),
             "mode": (["full", "preview (shape512, no colour)"], {"default": "full",
                      "tooltip": "full ≈ 30 min for 4–8 views; preview ≈ 5 min, geometry only"}),
             "seed": ("INT", {"default": 42, "min": 0, "max": 2 ** 31 - 1}),

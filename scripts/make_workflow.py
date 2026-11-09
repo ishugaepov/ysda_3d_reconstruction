@@ -13,6 +13,8 @@ import uuid
 nodes, links = [], []
 
 
+# NOTE: node-to-node data (photo names, input folder) uses custom socket types (YSDA_NAMES, YSDA_DIR), never
+# forceInput STRING: tools disagree on whether forceInput widgets take a widgets_values slot (journal 0011).
 def node(nid, type_, pos, size, widgets=(), outputs=(), title=None):
     n = {"id": nid, "type": type_, "pos": pos, "size": size, "flags": {}, "order": nid, "mode": 0,
          "inputs": [], "outputs": [{"name": o[0], "type": o[1], "links": []} for o in outputs],
@@ -35,7 +37,7 @@ X0, X1, X2, X3 = 40, 420, 840, 1300
 if "--v2" in sys.argv:
     # v2: photos -> masks -> RGBA views -> UniForge3D (Mac port, subprocess) -> GLB
     load = node(1, "YSDALoadImageFolder", [X0, 80], [320, 110], ["toy", 1024],
-                [("images", "IMAGE"), ("valid_mask", "MASK"), ("names", "STRING")])
+                [("images", "IMAGE"), ("valid_mask", "MASK"), ("names", "YSDA_NAMES")])
     bgm = node(2, "LoadBackgroundRemovalModel", [X0, 260], [320, 60], ["birefnet.safetensors"],
                [("BACKGROUND_REMOVAL", "BACKGROUND_REMOVAL")])
     rmbg = node(3, "RemoveBackground", [X1, 80], [300, 50], [], [("mask", "MASK")])
@@ -46,9 +48,9 @@ if "--v2" in sys.argv:
     link(ov, 0, pv_mask, "images", "IMAGE")
     prep = node(6, "YSDAPrepareUniForge3DInputs", [X2, 80], [380, 200],
                 ["toy", "IMG_4505,IMG_4509,IMG_4513,IMG_4518", 4],
-                [("input_dir", "STRING"), ("preview", "IMAGE"), ("selected", "STRING")],
+                [("input_dir", "YSDA_DIR"), ("preview", "IMAGE"), ("selected", "STRING")],
                 title="G0. Views for UniForge3D (first = anchor/front; empty list = K evenly spaced)")
-    link(rmbg, 0, prep, "object_mask", "MASK"); link(load, 1, prep, "valid_mask", "MASK"); link(load, 2, prep, "names", "STRING")
+    link(rmbg, 0, prep, "object_mask", "MASK"); link(load, 1, prep, "valid_mask", "MASK"); link(load, 2, prep, "names", "YSDA_NAMES")
     pv_views = node(7, "PreviewImage", [X2, 320], [420, 420], [], [], title="G0. Selected RGBA views")
     link(prep, 1, pv_views, "images", "IMAGE")
     txt_sel = node(8, "PreviewAny", [X2, 760], [420, 160], [], [("STRING", "STRING")], title="G0. Selected photos")
@@ -56,7 +58,7 @@ if "--v2" in sys.argv:
     uf = node(9, "YSDAUniForge3D", [X3, 80], [360, 130], ["full", 42, "fixed"],
               [("model_3d", "FILE_3D_GLB"), ("mesh", "MESH"), ("shape512_3d", "FILE_3D_GLB"), ("report", "STRING")],
               title="G. UniForge3D (Mac) — full ≈ 30 min, preview ≈ 5 min")
-    link(prep, 0, uf, "input_dir", "STRING")
+    link(prep, 0, uf, "input_dir", "YSDA_DIR")
     save = node(10, "SaveGLB", [X3 + 400, 80], [480, 520], ["ysda/v2_uniforge3d"], [], title="Final model (GLB)")
     link(uf, 0, save, "mesh", "FILE_3D_GLB")
     save512 = node(11, "SaveGLB", [X3 + 400, 640], [480, 460], ["ysda/v2_uniforge3d_shape512"], [],
@@ -78,7 +80,7 @@ if "--v2" in sys.argv:
     sys.exit(0)
 # Stage 0: inputs
 load = node(1, "YSDALoadImageFolder", [X0, 80], [320, 110], ["toy", 1024],
-            [("images", "IMAGE"), ("valid_mask", "MASK"), ("names", "STRING")])
+            [("images", "IMAGE"), ("valid_mask", "MASK"), ("names", "YSDA_NAMES")])
 bgm = node(2, "LoadBackgroundRemovalModel", [X0, 260], [320, 60], ["birefnet.safetensors"],
            [("BACKGROUND_REMOVAL", "BACKGROUND_REMOVAL")])
 da3m = node(3, "LoadDA3Model", [X0, 380], [320, 90], ["depth_anything_3_base.safetensors", "fp32"],
@@ -121,7 +123,7 @@ if V1:
     ref = node(20, "YSDARefineCamerasCOLMAP", [XR, 80], [340, 260], ["toy", 1024, 1600, 200, True],
                [("da3_geometry", "DA3_GEOMETRY"), ("object_mask", "MASK"), ("valid_mask", "MASK"), ("report", "STRING")])
     link(da3, 0, ref, "da3_geometry", "DA3_GEOMETRY"); link(rmbg, 0, ref, "object_mask", "MASK")
-    link(load, 1, ref, "valid_mask", "MASK"); link(load, 2, ref, "names", "STRING")
+    link(load, 1, ref, "valid_mask", "MASK"); link(load, 2, ref, "names", "YSDA_NAMES")
     txt_ref = node(21, "PreviewAny", [XR, 380], [340, 420], [], [("STRING", "STRING")], title="B'. COLMAP report")
     link(ref, 3, txt_ref, "source", "*")
     cons2 = node(22, "YSDACrossViewConsistency", [XR, 820], [340, 100], [0.02],

@@ -1,5 +1,5 @@
 {
- "id": "a6c4c36e-6d50-4c19-847b-d41cd7baadc7",
+ "id": "5af40665-96ec-44b6-8790-20b6ecdd195a",
  "revision": 0,
  "last_node_id": 25,
  "last_link_id": 36,
@@ -40,7 +40,7 @@
     },
     {
      "name": "names",
-     "type": "STRING",
+     "type": "YSDA_NAMES",
      "links": [
       22
      ]
@@ -759,7 +759,7 @@
     },
     {
      "name": "names",
-     "type": "STRING",
+     "type": "YSDA_NAMES",
      "link": 22
     }
    ],
@@ -1170,7 +1170,7 @@
    2,
    20,
    3,
-   "STRING"
+   "YSDA_NAMES"
   ],
   [
    23,
