@@ -140,6 +140,63 @@ def carve(depth, K, E, masks, bmin, bmax, res: int = 192, depth_tol: float = 0.0
     return occ.view(*dims).float(), voxel, (bmin + 0.5 * voxel)
 
 
+def edge_weight(masks: torch.Tensor, edge_px: int) -> torch.Tensor:
+    """~0 at the mask boundary rising to 1 at edge_px inside (multi-radius erosion average)."""
+    if edge_px <= 0:
+        return (masks >= 0.5).float()
+    m = (masks >= 0.5).float()[:, None]
+    radii = sorted({max(1, round(edge_px * k / 4)) for k in range(1, 5)})
+    acc = torch.zeros_like(m)
+    for r in radii:
+        acc += -F.max_pool2d(-m, 2 * r + 1, 1, r)
+    return (acc / len(radii))[:, 0]
+
+
+def tsdf_in_hull(depth, K, E, masks, hull, voxel: float, origin, conf=None, trunc_voxels: float = 5.0,
+                 chunk: int = 2_000_000, dist=None, edge_px: int = 0, bias_voxels: float = 0.0):
+    """Truncated signed-distance fusion of the (rescaled) depth maps, restricted to a hull.
+
+    For each voxel x and view i where x projects inside the mask: sdf_i = d_i(u,v) - z_i(x)
+    (positive = in front of the observed surface). Views with sdf_i > -trunc contribute
+    clamp(sdf_i/trunc, -1, 1), weighted by the normalised DA3 confidence at (u,v) (Curless & Levoy
+    1996). Voxels inside the hull that no view observes near the surface are interior (occluded,
+    e.g. the underside); voxels outside the hull are empty. Returns an occupancy-like field in [0,1]
+    (0.5 = surface) for the iso-surface extractor.
+    """
+    dims = hull.shape
+    axes = [origin[i] + torch.arange(dims[i]) * voxel for i in range(3)]
+    grid = torch.stack(torch.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
+    inside_hull = hull.reshape(-1) > 0.5
+    trunc = trunc_voxels * voxel
+    num = torch.zeros(len(grid))
+    den = torch.zeros(len(grid))
+    S, H, W = depth.shape
+    cnorm = None
+    if conf is not None:
+        cnorm = torch.stack([(c / torch.quantile(c[masks[i] >= 0.5], 0.9).clamp(min=1e-6)).clamp(0, 1)
+                             for i, c in enumerate(conf)])
+    ew = edge_weight(masks, edge_px) if edge_px > 0 else None
+    idx = torch.nonzero(inside_hull)[:, 0]
+    for i in range(S):
+        for a in range(0, len(idx), chunk):
+            ii = idx[a:a + chunk]
+            uv, z = project(grid[ii], K[i], E[i], _k1(dist, i))
+            ok = (z > 0) & (uv[:, 0] >= 0) & (uv[:, 0] <= W - 1) & (uv[:, 1] >= 0) & (uv[:, 1] <= H - 1)
+            m = sample(masks[i][..., None], uv, "nearest")[:, 0] >= 0.5
+            d = sample(depth[i][..., None], uv, "nearest")[:, 0]
+            sdf = d - z
+            use = ok & m & (sdf > -trunc)
+            w = sample(cnorm[i][..., None], uv, "nearest")[:, 0] if cnorm is not None else torch.ones_like(z)
+            if ew is not None:
+                w = w * sample(ew[i][..., None], uv, "nearest")[:, 0]
+            w = w * use.float()
+            num[ii] += w * ((sdf - bias_voxels * voxel) / trunc).clamp(-1, 1)
+            den[ii] += w
+    tsdf = torch.where(den > 1e-6, num / den.clamp(min=1e-6), torch.full_like(num, -1.0))  # unobserved interior
+    tsdf = torch.where(inside_hull, tsdf, torch.ones_like(tsdf))                           # outside hull: empty
+    return ((1 - tsdf) / 2).view(*dims)
+
+
 def smooth_volume(vol: torch.Tensor, iters: int = 1) -> torch.Tensor:
     v = vol[None, None]
     for _ in range(iters):
@@ -255,7 +312,8 @@ def opencv_to_gltf(v: torch.Tensor) -> torch.Tensor:
 def reconstruct(depth, K, E, images, masks, surface_fn, res: int = 192, depth_tol: float = 0.02,
                 max_violations: int = 1, conf=None, conf_quantile: float = 0.1, smooth_iters: int = 1,
                 dist=None, visibility: str = "da3", color_power: float = 2.0, mask_erode_px: int = 0,
-                log=print):
+                surface_mode: str = "carve", tsdf_trunc_voxels: float = 5.0, tsdf_edge_px: int = 0,
+                tsdf_bias_voxels: float = 0.0, tsdf_calibrate: bool = False, log=print):
     """Full v0: returns (verts in DA3 world space (V,3), faces (F,3), colors (V,3), report dict)."""
     keep = masks >= 0.5
     if conf is not None:
@@ -266,11 +324,33 @@ def reconstruct(depth, K, E, images, masks, surface_fn, res: int = 192, depth_to
         raise ValueError("too few object points: check the masks (is the object segmented?)")
     bmin, bmax = object_bounds(pts)
     log(f"fused {len(pts)} points; bounds {bmin.tolist()} .. {bmax.tolist()}")
-    occ, voxel, origin = carve(depth, K, E, masks, bmin, bmax, res, depth_tol, max_violations, dist=dist)
+    calib = None
+    if tsdf_calibrate:
+        # Per-view depth scale against the visual hull's own depth (exact where the object is
+        # convex). Removes a systematic ~4% DA3 depth bias on the toy (journal 0008).
+        hull, voxel, origin = carve(depth, K, E, masks, bmin, bmax, res, 10.0, 1, dist=dist)
+        hv, hf = surface_fn(smooth_volume(hull, smooth_iters), 0.5, voxel, origin.tolist())
+        hv, hf = largest_component(np.asarray(hv, np.float32), np.asarray(hf, np.int64))
+        hz = mesh_depth_maps(torch.from_numpy(hv), torch.from_numpy(hf), K, E, depth.shape[1:], dist)
+        inner = erode_masks(masks, 5) >= 0.5
+        calib = []
+        for i in range(depth.shape[0]):
+            ok = inner[i] & torch.isfinite(hz[i]) & (depth[i] > 0)
+            calib.append(float((hz[i][ok] / depth[i][ok]).median()) if ok.sum() > 100 else 1.0)
+        depth = depth * torch.tensor(calib)[:, None, None]
+        log(f"hull depth calibration factors: {[round(c, 4) for c in calib]}")
+    carve_tol = 10.0 if surface_mode == "tsdf_in_hull" else depth_tol
+    occ, voxel, origin = carve(depth, K, E, masks, bmin, bmax, res, carve_tol, max_violations, dist=dist)
+    if surface_mode == "tsdf_in_hull":
+        # occ is the visual hull; the surface inside it comes from depth fusion.
+        field = tsdf_in_hull(depth, K, E, masks, occ, voxel, origin, conf=conf,
+                             trunc_voxels=tsdf_trunc_voxels, dist=dist, edge_px=tsdf_edge_px,
+                             bias_voxels=tsdf_bias_voxels)
+        log(f"TSDF in hull: {int((field >= 0.5).sum())} interior voxels")
     log(f"carved grid {tuple(occ.shape)}: {int(occ.sum())} occupied voxels")
     if occ.sum() == 0:
         raise ValueError("carving removed everything: masks or camera poses are inconsistent")
-    vol = smooth_volume(occ, smooth_iters)
+    vol = smooth_volume(field if surface_mode == "tsdf_in_hull" else occ, smooth_iters)
     verts, faces = surface_fn(vol, 0.5, voxel, origin.tolist())
     verts, faces = np.asarray(verts, np.float32), np.asarray(faces, np.int64)
     if len(faces) == 0:
@@ -295,7 +375,85 @@ def reconstruct(depth, K, E, images, masks, surface_fn, res: int = 192, depth_to
         "voxel_size": voxel, "vertices": int(len(verts_t)), "faces": int(len(faces_t)),
         "vertices_seen_fraction": round(seen_frac, 3),
     }
+    if calib is not None:
+        report["hull_depth_calibration"] = [round(c, 4) for c in calib]
     return verts_t, faces_t, colors, report
+
+
+def floor_plane(depth, K, E, masks, dist=None, ring_inner_px: int = 15, ring_outer_px: int = 80,
+                stride: int = 4, iters: int = 400, inlier_frac_tol: float = 0.01, seed: int = 0):
+    """RANSAC plane through depth points in a ring around each mask (the surface the object stands on).
+
+    Returns (normal n pointing towards the cameras, offset c with n·x = c, inlier fraction), or None.
+    """
+    m = (masks >= 0.5).float()[:, None]
+    outer = F.max_pool2d(m, 2 * ring_outer_px + 1, 1, ring_outer_px)[:, 0] > 0
+    inner = F.max_pool2d(m, 2 * ring_inner_px + 1, 1, ring_inner_px)[:, 0] > 0
+    ring = outer & ~inner
+    pts = []
+    for i in range(depth.shape[0]):
+        X, _ = unproject(depth[i], K[i], E[i], ring[i], stride, _k1(dist, i))
+        pts.append(X)
+    P = torch.cat(pts)
+    if len(P) < 100:
+        return None
+    g = torch.Generator().manual_seed(seed)
+    P = P[torch.randperm(len(P), generator=g)[:200_000]]
+    scale = float((P - P.median(0).values).norm(dim=-1).median())
+    tol = inlier_frac_tol * scale * 2
+    best = (0, None)
+    for _ in range(iters):
+        a, b, c = P[torch.randint(len(P), (3,), generator=g)]
+        n = torch.cross(b - a, c - a, dim=-1)
+        if n.norm() < 1e-9:
+            continue
+        n = n / n.norm()
+        cnt = int(((P - a) @ n).abs().lt(tol).sum())
+        if cnt > best[0]:
+            best = (cnt, (n, float(a @ n)))
+    if best[1] is None:
+        return None
+    n, off = best[1]
+    inl = ((P @ n - off).abs() < tol)
+    # Least-squares refit on inliers.
+    Q = P[inl]
+    mu = Q.mean(0)
+    n = torch.linalg.svd(Q - mu, full_matrices=False).Vh[-1]
+    off = float(mu @ n)
+    if float((camera_centers(E) @ n - off).mean()) < 0:   # point the normal towards the cameras (up)
+        n, off = -n, -off
+    return n, off, float(inl.float().mean())
+
+
+def upright_frame(E: torch.Tensor, up: torch.Tensor | None, anchor: int = 0):
+    """Rotation R (rows = right, up, front) taking world vectors into an upright display frame.
+
+    up: floor normal (or None → mean camera up-vector, i.e. -y of each camera). front: direction from
+    the scene towards the anchor camera, projected onto the floor plane.
+    """
+    if up is None:
+        up = F.normalize((-E[:, 1, :3]).mean(0), dim=0)       # camera -y axis in world coordinates
+    up = F.normalize(up, dim=0)
+    C = camera_centers(E)
+    f = C[anchor] - C.mean(0)
+    f = f - (f @ up) * up
+    if f.norm() < 1e-9:
+        f = F.normalize(torch.cross(up, torch.tensor([1.0, 0.0, 0.0]), dim=0), dim=0)
+    front = F.normalize(f, dim=0)
+    right = torch.cross(up, front, dim=0)                       # right-handed: x = y × z
+    return torch.stack([right, up, front])
+
+
+def to_display_upright(verts: torch.Tensor, R: torch.Tensor, floor_offset: float | None = None,
+                       up: torch.Tensor | None = None) -> torch.Tensor:
+    """Rotate into the upright frame (glTF: +Y up, +Z towards the anchor camera), unit size, standing
+    on y = 0 (on the floor plane if given, else on the lowest vertex), centred in x/z."""
+    v = verts @ R.T
+    v = v - torch.stack([v[:, 0].mean(), torch.tensor(0.0), v[:, 2].mean()])
+    base = (floor_offset if (floor_offset is not None) else None)
+    y0 = float(v[:, 1].min()) if base is None else float(base)
+    v[:, 1] -= y0
+    return v / v.abs().max()
 
 
 def to_display(verts: torch.Tensor) -> torch.Tensor:

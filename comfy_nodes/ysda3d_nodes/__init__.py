@@ -115,7 +115,8 @@ class YSDAReconstructMesh:
                    "blended from the photos that see each vertex. Preview: photos (top) vs. renders (bottom).")
 
     def run(self, da3_geometry, object_mask, voxel_resolution, depth_tolerance, max_violations, valid_mask=None,
-            visibility="da3", color_power=2.0, mask_erode_px=0):
+            visibility="da3", color_power=2.0, mask_erode_px=0, upright=False, surface_mode="carve",
+            calibrate_depth=False):
         from comfy_extras.nodes_gaussian_splat import _surface_nets
 
         g = da3_geometry
@@ -137,7 +138,8 @@ class YSDAReconstructMesh:
         verts, faces, colors, report = recon.reconstruct(
             depth, K, E, images, masks, surface_fn, res=voxel_resolution, depth_tol=depth_tolerance,
             max_violations=max_violations, conf=conf, dist=dist, visibility=visibility,
-            color_power=color_power, mask_erode_px=mask_erode_px)
+            color_power=color_power, mask_erode_px=mask_erode_px, surface_mode=surface_mode,
+            tsdf_calibrate=calibrate_depth, tsdf_bias_voxels=3.0 if surface_mode == "tsdf_in_hull" else 0.0)
 
         idx = sorted(set(np.linspace(0, S - 1, min(S, 6)).round().astype(int).tolist()))
         tiles = [torch.cat([images[i], torch.from_numpy(render_points(
@@ -148,7 +150,17 @@ class YSDAReconstructMesh:
         report["silhouette_iou_mean"] = round(float(np.mean(ious)), 3)
         report["silhouette_iou_per_view"] = ious
 
-        mesh = MESH(recon.to_display(verts)[None], faces[None], vertex_colors=colors[None])
+        if upright:
+            fp = recon.floor_plane(depth, K, E, masks, dist=dist)
+            up, off = (fp[0], fp[1]) if fp is not None and fp[2] >= 0.2 else (None, None)
+            R = recon.upright_frame(E, up)
+            disp = recon.to_display_upright(verts, R, floor_offset=off)
+            report["upright"] = {"source": "floor plane" if up is not None else "mean camera up (no floor found)",
+                                 "floor_inlier_fraction": round(fp[2], 3) if fp is not None else None,
+                                 "up_world": [round(float(x), 4) for x in R[1]]}
+        else:
+            disp = recon.to_display(verts)
+        mesh = MESH(disp[None], faces[None], vertex_colors=colors[None])
         return mesh, preview, json.dumps(report, indent=1), sil
 
 
@@ -195,6 +207,28 @@ class YSDAReconstructMeshV11(YSDAReconstructMesh):
     DESCRIPTION = ("v1.1: like v1, but colours use visibility from the mesh's own z-buffer (consistent with the "
                    "surface being coloured) and carving uses a looser DA3-depth tolerance. On the toy: held-out "
                    "full-mask PSNR 13.7 → 17.4 dB, silhouette IoU 0.88 → 0.92 (journal 0007).")
+
+
+class YSDAReconstructMeshV12(YSDAReconstructMeshV11):
+    """v1.2: v1.1 + upright output (floor plane → +Y, anchor photo → front). Surface options exposed."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        t = YSDAReconstructMeshV11.INPUT_TYPES()
+        t["required"]["upright"] = ("BOOLEAN", {"default": True,
+                                    "tooltip": "Rotate so the floor is horizontal (y=0, +Y up) and the first photo looks at the front. "
+                                               "Falls back to the mean camera up-vector if no floor is found"})
+        t["required"]["surface_mode"] = (["carve", "tsdf_in_hull"], {"default": "carve",
+                                         "tooltip": "carve = v1.1 (best overall). tsdf_in_hull: depth fusion inside the mask hull "
+                                                    "(sharper face, but narrower shape on the toy, journal 0008)"})
+        t["required"]["calibrate_depth"] = ("BOOLEAN", {"default": False,
+                                            "tooltip": "Rescale each DA3 depth map to the visual hull's depth first "
+                                                       "(removes a ~4% bias, but ghosts concave regions; journal 0008)"})
+        return t
+
+    DESCRIPTION = ("v1.2: v1.1 reconstruction with upright output: a RANSAC floor plane under the object becomes "
+                   "y=0 with +Y up, and the first photo's camera defines the front (+Z). The report shows the up-vector "
+                   "source. TSDF/calibration options are available for experiments (journal 0008).")
 
 
 class YSDAMaskOverlay:
@@ -344,6 +378,7 @@ class YSDARefineCamerasCOLMAP:
 
 
 NODE_CLASS_MAPPINGS = {
+    "YSDAReconstructMeshV12": YSDAReconstructMeshV12,
     "YSDAReconstructMeshV11": YSDAReconstructMeshV11,
     "YSDARefineCamerasCOLMAP": YSDARefineCamerasCOLMAP,
     "YSDAMaskOverlay": YSDAMaskOverlay,
@@ -354,6 +389,7 @@ NODE_CLASS_MAPPINGS = {
     "YSDAReconstructMesh": YSDAReconstructMesh,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "YSDAReconstructMeshV12": "YSDA Reconstruct Mesh (v1.2, upright)",
     "YSDAReconstructMeshV11": "YSDA Reconstruct Mesh (v1.1)",
     "YSDARefineCamerasCOLMAP": "YSDA Refine Cameras (COLMAP)",
     "YSDAMaskOverlay": "YSDA Mask Overlay (diagnostic)",

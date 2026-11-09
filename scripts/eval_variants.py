@@ -45,6 +45,22 @@ VARIANTS = {
     "I_strict_bestview":    dict(depth_tol=10.0, max_violations=0, visibility="mesh", color_power=50, mask_erode_px=0),
     "J_carve02_bestview":   dict(depth_tol=0.02, max_violations=1, visibility="mesh", color_power=50, mask_erode_px=0),
     "K_carve05_strict_bv":  dict(depth_tol=0.05, max_violations=0, visibility="mesh", color_power=50, mask_erode_px=0),
+    # v1.2: surface from TSDF fusion of DA3 depths inside the mask hull
+    "L_tsdf_hull_t5":       dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=5),
+    "M_tsdf_hull_t3":       dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=3),
+    "N_tsdf_hull_t8":       dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=8),
+    "P_tsdf_t5_edge25":     dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=5, tsdf_edge_px=25),
+    "Q_tsdf_t5_bias3":      dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=5, tsdf_bias_voxels=3),
+    "R_tsdf_t8_edge25_b3":  dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=8, tsdf_edge_px=25, tsdf_bias_voxels=3),
+    "S_tsdf_t5_calib":      dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=5, tsdf_calibrate=True),
+    "T_tsdf_t5_calib_b2":   dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=5, tsdf_calibrate=True, tsdf_bias_voxels=2),
+    "U_tsdf_t8_calib":      dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=8, tsdf_calibrate=True),
+    "V_calib_carve02":      dict(depth_tol=0.02, max_violations=1, visibility="mesh", color_power=2, tsdf_calibrate=True),
+    "W_calib_carve03":      dict(depth_tol=0.03, max_violations=1, visibility="mesh", color_power=2, tsdf_calibrate=True),
+    "X_calib_carve05":      dict(depth_tol=0.05, max_violations=1, visibility="mesh", color_power=2, tsdf_calibrate=True),
+    "Y_tsdf_b3_edge60":     dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=5, tsdf_bias_voxels=3, tsdf_edge_px=60),
+    "Z_tsdf_b3_edge100":    dict(depth_tol=10.0, max_violations=1, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=5, tsdf_bias_voxels=3, tsdf_edge_px=100),
+    "O_tsdf_stricthull_t5": dict(depth_tol=10.0, max_violations=0, visibility="mesh", color_power=2, surface_mode="tsdf_in_hull", tsdf_trunc_voxels=5),
 }
 only = os.environ.get("VARIANTS")
 results = {}
@@ -56,6 +72,8 @@ for name, kw in VARIANTS.items():
         sub(depth), sub(K), sub(E), sub(images), sub(masks),
         lambda v, l, vx, o: _surface_nets(v, l, vx, o, torch.device("cpu")),
         conf=sub(conf), dist=sub(dist) if dist is not None else None, log=lambda *a: None, **kw)
+    if "hull_depth_calibration" in rep:
+        print("   calibration:", rep["hull_depth_calibration"])
     pm, tiles = diagnostics.photometric_check(verts, faces, colors, K, E, images, masks, held, dist=dist)
     _, ious = diagnostics.silhouette_check(verts, faces, K[held], E[held], masks[held],
                                            dist=dist[held] if dist is not None else None)
