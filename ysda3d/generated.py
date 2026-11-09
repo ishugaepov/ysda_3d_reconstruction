@@ -54,10 +54,21 @@ def register_generated_mesh(gen_verts, gen_faces, K, E, masks, dist=None, ref_ve
                             n_mask: int = 1500, yaw_search: bool = True, log=print):
     """Similarity transform taking generator-frame vertices (glTF: +Y up, +Z front) into the camera world.
 
-    ref_verts (optional): a reconstruction in the camera world (e.g. v1.2), used for the initial
-    centre and scale; otherwise the mask-hull is not needed and the masks alone drive the fit.
+    ref_verts: a reconstruction in the camera world (e.g. v1.2), used for the initial centre and scale.
     Returns (world_verts, info dict with scale/R/t and IoU before/after).
     """
+    # ComfyUI runs nodes under torch.inference_mode(). Tensors created in it (the inputs, and anything
+    # derived from them there) can never be saved for backward, and enable_grad() doesn't lift that.
+    # So fit outside inference mode, on normal copies of the inputs (journal 0012).
+    with torch.inference_mode(False):
+        c = lambda x: x.clone() if torch.is_tensor(x) else x  # noqa: E731
+        floor = tuple(c(x) for x in floor) if floor is not None else None
+        return _register(c(gen_verts), c(gen_faces), c(K), c(E), c(masks), c(dist), c(ref_verts), floor,
+                         anchor, iters, n_points, n_mask, yaw_search, log)
+
+
+def _register(gen_verts, gen_faces, K, E, masks, dist, ref_verts, floor, anchor, iters, n_points, n_mask,
+              yaw_search, log):
     S, H, W = masks.shape
     up = floor[0] if floor is not None else None
     R_up = recon.upright_frame(E, up, anchor)              # rows: right, up, front (world)
@@ -121,18 +132,16 @@ def register_generated_mesh(gen_verts, gen_faces, K, E, masks, dist=None, ref_ve
         init_world = world(params, g - g_c)
     iou0 = silhouette_iou(init_world, gen_faces.long(), K, E, masks, dist)
     opt = torch.optim.Adam(params, lr=1e-2)
-    with torch.inference_mode(False), torch.enable_grad():   # callers (ComfyUI) may disable autograd
-        params = [p.detach().clone().requires_grad_(True) for p in params]
-        opt = torch.optim.Adam(params, lr=1e-2)
+    with torch.enable_grad():                                 # callers may have disabled autograd
         for it in range(iters):
             opt.zero_grad()
             L = loss_fn(params)
             L.backward()
             opt.step()
             if it % 100 == 0:
-                log(f"   register it {it}: loss {float(L):.5f}")
-    with torch.no_grad():
-        out = world(params, g - g_c)
+                log(f"   register it {it}: loss {float(L.detach()):.5f}")
+    params = [p.detach() for p in params]
+    out = world(params, g - g_c)
     iou1 = silhouette_iou(out, gen_faces.long(), K, E, masks, dist)
     info = {"init_yaw_deg": round(math.degrees(best[1]), 1), "scale": float(s0 * torch.exp(params[0])),
             "rotation_deg": round(math.degrees(float(params[1].norm())), 2),

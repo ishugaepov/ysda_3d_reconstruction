@@ -458,21 +458,43 @@ class YSDAUniForge3D:
     FUNCTION = "run"
     CATEGORY = CATEGORY + "/v2"
     DESCRIPTION = ("Runs v2/uniforge_mac/run.py in ~/src/uniforge3d-venv (override with $YSDA_UNIFORGE_PYTHON). "
-                   "Needs ~40 GB of unified memory while running; ComfyUI's loaded models are freed first.")
+                   "Needs ~40 GB of unified memory while running; ComfyUI's loaded models are freed first. "
+                   "A finished run is reused when the photos (exactly), masks (up to stray pixels), mode, seed and "
+                   "port code all match (report: cached = true); change the seed to force a new generation.")
 
     def run(self, input_dir, mode, seed):
+        import time
+        from comfy_api.latest._util.geometry_types import File3D
+        from comfy_extras.nodes_mesh_io import Get3DComponents
+        from ysda3d import runcache
+
+        preview = mode.startswith("preview")
+        runs_root = os.path.join(folder_paths.get_output_directory(), "ysda", "uniforge3d")
+        key = {"mode": mode, "seed": seed, "code": runcache.code_version(os.path.dirname(UNIFORGE_RUNNER))}
+        views, alphas = runcache.fingerprint(input_dir)
+        out_dir = runcache.find(runs_root, key, views, alphas)
+        cached = out_dir is not None
+        if not cached:
+            out_dir = os.path.join(runs_root, time.strftime("%Y%m%d_%H%M%S"))
+            self._generate(input_dir, out_dir, preview, seed)
+            runcache.save(out_dir, key, views, alphas)
+        st = json.load(open(os.path.join(out_dir, "status.json")))
+        shape512 = st.get("shape512")
+        final = shape512 if preview else st.get("output", os.path.join(out_dir, "model.glb"))
+        mesh = Get3DComponents.execute(File3D(final)).result[0]
+        report = {"mode": mode, "seed": seed, "input_dir": input_dir, "output_dir": out_dir, "cached": cached,
+                  "stages": st.get("stages"), "total_seconds": st.get("total_seconds"),
+                  "vertices": st.get("vertices"), "faces": st.get("faces")}
+        return File3D(final), mesh, File3D(shape512), json.dumps(report, indent=1)
+
+    def _generate(self, input_dir, out_dir, preview, seed):
         import subprocess
         import time
         import comfy.model_management as mm
         import comfy.utils
-        from comfy_api.latest._util.geometry_types import File3D
-        from comfy_extras.nodes_mesh_io import Get3DComponents
 
         if not os.path.exists(UNIFORGE_PYTHON):
             raise FileNotFoundError(f"UniForge3D venv python not found: {UNIFORGE_PYTHON} (see v2/uniforge_mac/README.md)")
-        preview = mode.startswith("preview")
-        out_dir = os.path.join(folder_paths.get_output_directory(), "ysda", "uniforge3d",
-                               time.strftime("%Y%m%d_%H%M%S"))
         os.makedirs(out_dir, exist_ok=True)
         out_glb = os.path.join(out_dir, "model.glb")
         status_path = os.path.join(out_dir, "status.json")
@@ -509,14 +531,6 @@ class YSDAUniForge3D:
         tail = "\n".join(open(log_path).read().splitlines()[-25:])
         if proc.returncode != 0:
             raise RuntimeError(f"UniForge3D failed (exit {proc.returncode}); log {log_path}:\n{tail}")
-        st = json.load(open(status_path))
-        shape512 = st.get("shape512")
-        final = shape512 if preview else st.get("output", out_glb)
-        mesh = Get3DComponents.execute(File3D(final)).result[0]
-        report = {"mode": mode, "seed": seed, "input_dir": input_dir, "output_dir": out_dir,
-                  "stages": st.get("stages"), "total_seconds": st.get("total_seconds"),
-                  "vertices": st.get("vertices"), "faces": st.get("faces")}
-        return File3D(final), mesh, File3D(shape512), json.dumps(report, indent=1)
 
 
 class YSDAFitGeneratedMesh:

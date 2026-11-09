@@ -1,7 +1,7 @@
 # 0012 — v2.2 + v2.3: register UniForge3D to the photos' cameras, colour it from the photos
 
 - **Date:** 2026-11-09
-- **Status:** done offline (node test); the Desktop run is pending a restart (new node)
+- **Status:** done. The first Desktop run failed in node F (item 7 below, fixed); the re-run after a restart is pending
 - **Stage(s):** R (registration), T (appearance), evaluation, mesh repair
 - **Builds on:** #0005 (COLMAP cameras), #0007 (mesh visibility), #0010 (UniForge3D on the toy), plan v2.2/v2.3
 
@@ -57,6 +57,15 @@
 4. **Visibility culling** (`meshfix.cull_hidden_faces`): keep faces frontmost from at least one of 96 sphere directions. It only removed ~1% (most junk is *on* the surface), but together with **|cos|** weighting (orientation-agnostic) the noise is gone, the raw geometry keeps the face in the right place, and the face is clean.
 5. Generated colours on unobserved regions (fin edges, underside) were saturated albedo, giving red fringes. Fixed by **affine colour harmonisation**.
 6. Eval artifact checked: splat gaps in the renderer were **not** the cause of the low scores (filling them changed nothing). Gap filling is kept in `photometric_check` anyway.
+7. **The first Desktop run failed in node F** after 40 min: `Inference tensors cannot be saved for backward`.
+   - ComfyUI runs every node under `torch.inference_mode()`. Tensors created there can never be saved for backward, and `enable_grad()` doesn't lift that. That covers the node's inputs and the samples, cameras, masks and up-frame derived from them.
+   - The offline node test used only `set_grad_enabled(False)`, which is weaker, so it passed.
+   - Fix: `register_generated_mesh` leaves inference mode for the whole fit and works on cloned inputs. Node tests now run under `torch.inference_mode()`. The fit node gives the same result there (276–282 s, IoU 0.677 → 0.962–0.963, observed fraction 0.78; the spread is run-to-run).
+   - So that a restart doesn't cost the 35-minute generation again, **YSDA UniForge3D caches finished runs** (`ysda3d/runcache.py`). A run is reused when all of these match:
+     - the photos, exactly (RGB hash);
+     - the masks, up to 1e-4 of pixels differing by more than 32/255;
+     - mode, seed and the port's source code.
+   - A fresh BiRefNet pass in another process reproduced all 8 masks bit-identically, so the cache does hit after a restart. The 20:21 run (K = 8, seed 42) was registered retroactively (`python -m ysda3d.runcache`).
 
 ## Conclusion
 - v2.2 **confirmed**: registration to COLMAP works (IoU 0.96 on held-out photos).
@@ -68,6 +77,7 @@
 - Workflow `workflows/photos_to_3d_v2_3_fused.ui.json` (Desktop: `ysda_photos_to_3d_v2_3_fused`): masks + DA3 + COLMAP + UniForge3D (K = 8) + fusion.
 - Model `models/toy/v2_3_fused_k8.glb` (decimated to 0.93M faces, 14 MB).
 - Node test: 279 s for the fit, IoU 0.677 → 0.963, observed fraction 0.78.
+- UniForge3D run cache: `ysda3d/runcache.py`, used by the YSDA UniForge3D node (report: `cached`). Change the seed to force a new generation.
 
 ## Next
 1. Per-view 2D alignment (or optimising vertex positions slightly toward photo consistency) to recover the last ~0.4 dB.
