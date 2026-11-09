@@ -124,20 +124,48 @@ def write_point_cloud_ply(path: str, points: torch.Tensor, colors: torch.Tensor,
         f.write(header.encode()); f.write(rec.tobytes())
 
 
-def photometric_check(verts, faces, colors, K, E, images, masks, views, dist=None, n_samples=2_000_000):
+def _fill_splat_gaps(img: torch.Tensor, cov: torch.Tensor, iters: int = 4):
+    """Fill pixels inside the (closed) rendered silhouette that no splat hit, from covered neighbours.
+
+    The point-splat renderer leaves sub-pixel gaps that show the white background; without this,
+    meshes with more total area (e.g. generated meshes with inner shells) look brighter and score
+    worse for a reason that has nothing to do with their colours (journal 0012).
+    """
+    closed = (-F.max_pool2d(-F.max_pool2d(cov.float()[None, None], 5, 1, 2), 5, 1, 2))[0, 0] > 0.5
+    c = cov.float()
+    x = img * c[..., None]
+    for _ in range(iters):
+        num = F.avg_pool2d(x.permute(2, 0, 1)[None], 3, 1, 1)[0].permute(1, 2, 0)
+        den = F.avg_pool2d(c[None, None], 3, 1, 1)[0, 0]
+        fill = closed & (c < 0.5) & (den > 0)
+        x = torch.where(fill[..., None], num / den.clamp(min=1e-6)[..., None], x)
+        c = torch.where(fill, torch.ones_like(c), c)
+    return torch.where(c[..., None] > 0.5, x, img), c > 0.5
+
+
+def photometric_check(verts, faces, colors, K, E, images, masks, views, dist=None, n_samples=None):
     """Render the vertex-coloured mesh into `views` and compare with the photos inside the mask.
 
     Returns per-view {psnr, coverage} (coverage = fraction of mask pixels the render covers) and
     tiles [photo | render | |error|×4] for inspection. Use held-out views for an honest number.
     """
-    P, C = recon.surface_samples(verts, faces, n_samples, colors)
     S, H, W = masks.shape
+    if n_samples is None:
+        # ~4 samples per pixel of the largest projected footprint, from the mesh area.
+        tri = verts[faces]
+        area = float(torch.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0], dim=-1).norm(dim=-1).sum() / 2)
+        Cc = recon.camera_centers(E[list(views)])
+        dmin = float((verts.mean(0) - Cc).norm(dim=-1).min())
+        f = float(K[list(views)][:, 0, 0].max())
+        n_samples = int(min(20_000_000, max(2_000_000, 4 * area * (f / dmin) ** 2)))
+    P, C = recon.surface_samples(verts, faces, n_samples, colors)
     out, tiles = [], []
     for i in views:
         k1 = recon._k1(dist, i)
         zb = recon.zbuffer(P, K[i], E[i], (H, W), k1, fill=0)
         img = torch.from_numpy(render_points(P, C, K[i], E[i], (H, W), radius=1, bg=1.0, k1=k1))
         cov = torch.from_numpy(render_points(P, torch.ones_like(C), K[i], E[i], (H, W), radius=1, bg=0.0, k1=k1))[..., 0] > 0.5
+        img, cov = _fill_splat_gaps(img, cov)
         m = (masks[i] >= 0.5) & cov
         mse = float(((img - images[i]) ** 2)[m].mean()) if m.any() else float("nan")
         psnr = 10 * np.log10(1.0 / max(mse, 1e-10))

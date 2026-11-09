@@ -5,6 +5,7 @@
   python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_1.ui.json --v11            # v1.1: + mesh visibility
   python3 scripts/make_workflow.py workflows/photos_to_mesh_v1_2.ui.json --v12            # v1.2: + upright output
   python3 scripts/make_workflow.py workflows/photos_to_3d_v2_uniforge3d.ui.json --v2      # v2: UniForge3D
+  python3 scripts/make_workflow.py workflows/photos_to_3d_v2_3_fused.ui.json --v23        # v2.3: + registration + photo colours
 """
 import json
 import sys
@@ -33,6 +34,70 @@ def link(src, out_idx, dst, in_name, type_):
 
 
 X0, X1, X2, X3 = 40, 420, 840, 1300
+
+if "--v23" in sys.argv:
+    # v2.3: reconstruction (DA3 + COLMAP cameras) + generation (UniForge3D), fused by registration + photo colours
+    load = node(1, "YSDALoadImageFolder", [X0, 80], [320, 110], ["toy", 1024],
+                [("images", "IMAGE"), ("valid_mask", "MASK"), ("names", "YSDA_NAMES")])
+    bgm = node(2, "LoadBackgroundRemovalModel", [X0, 260], [320, 60], ["birefnet.safetensors"],
+               [("BACKGROUND_REMOVAL", "BACKGROUND_REMOVAL")])
+    da3m = node(3, "LoadDA3Model", [X0, 380], [320, 90], ["depth_anything_3_base.safetensors", "fp32"],
+                [("DA3_MODEL", "DA3_MODEL")])
+    rmbg = node(4, "RemoveBackground", [X1, 80], [300, 50], [], [("mask", "MASK")])
+    link(bgm, 0, rmbg, "bg_removal_model", "BACKGROUND_REMOVAL"); link(load, 0, rmbg, "image", "IMAGE")
+    ov = node(5, "YSDAMaskOverlay", [X1, 170], [300, 70], [], [("overlay", "IMAGE")])
+    link(load, 0, ov, "images", "IMAGE"); link(rmbg, 0, ov, "mask", "MASK"); link(load, 1, ov, "valid_mask", "MASK")
+    pv_mask = node(6, "PreviewImage", [X1, 280], [380, 400], [], [], title="A. Masks")
+    link(ov, 0, pv_mask, "images", "IMAGE")
+    # reconstruction branch: cameras
+    da3 = node(7, "YSDADepthAnything3Multiview", [X2, 80], [320, 110], [504, "cam_dec"], [("da3_geometry", "DA3_GEOMETRY")])
+    link(da3m, 0, da3, "da3_model", "DA3_MODEL"); link(load, 0, da3, "images", "IMAGE")
+    ref = node(8, "YSDARefineCamerasCOLMAP", [X2, 230], [340, 260], ["toy", 1024, 1600, 200, True],
+               [("da3_geometry", "DA3_GEOMETRY"), ("object_mask", "MASK"), ("valid_mask", "MASK"), ("report", "STRING")])
+    link(da3, 0, ref, "da3_geometry", "DA3_GEOMETRY"); link(rmbg, 0, ref, "object_mask", "MASK")
+    link(load, 1, ref, "valid_mask", "MASK"); link(load, 2, ref, "names", "YSDA_NAMES")
+    txt_ref = node(9, "PreviewAny", [X2, 520], [340, 380], [], [("STRING", "STRING")], title="B. COLMAP report")
+    link(ref, 3, txt_ref, "source", "*")
+    # generation branch
+    prep = node(10, "YSDAPrepareUniForge3DInputs", [X3 - 40, 80], [380, 200],
+                ["toy", "IMG_4505,IMG_4507,IMG_4509,IMG_4511,IMG_4513,IMG_4515,IMG_4518,IMG_4520", 8],
+                [("input_dir", "YSDA_DIR"), ("preview", "IMAGE"), ("selected", "STRING")],
+                title="G0. Views for UniForge3D (first = anchor/front)")
+    link(rmbg, 0, prep, "object_mask", "MASK"); link(load, 1, prep, "valid_mask", "MASK"); link(load, 2, prep, "names", "YSDA_NAMES")
+    pv_views = node(11, "PreviewImage", [X3 - 40, 320], [380, 380], [], [], title="G0. Selected views")
+    link(prep, 1, pv_views, "images", "IMAGE")
+    uf = node(12, "YSDAUniForge3D", [X3 - 40, 730], [380, 130], ["full", 42, "fixed"],
+              [("model_3d", "FILE_3D_GLB"), ("mesh", "MESH"), ("shape512_3d", "FILE_3D_GLB"), ("report", "STRING")],
+              title="G. UniForge3D (Mac) — ≈ 35 min for 8 views")
+    link(prep, 0, uf, "input_dir", "YSDA_DIR")
+    save_gen = node(13, "SaveGLB", [X3 - 40, 900], [380, 420], ["ysda/v2_3_generated_raw"], [],
+                    title="G. Raw generated model (albedo colours)")
+    link(uf, 0, save_gen, "mesh", "FILE_3D_GLB")
+    # fusion
+    fit = node(14, "YSDAFitGeneratedMesh", [X3 + 380, 80], [380, 230], ["IMG_4505", "photos (v2.3)", 300],
+               [("mesh", "MESH"), ("preview", "IMAGE"), ("report", "STRING")],
+               title="F. Fit generated mesh to photos (v2.2 registration + v2.3 photo colours)")
+    link(uf, 1, fit, "mesh", "MESH"); link(ref, 0, fit, "da3_geometry", "DA3_GEOMETRY")
+    link(ref, 1, fit, "object_mask", "MASK"); link(ref, 2, fit, "valid_mask", "MASK"); link(load, 2, fit, "names", "YSDA_NAMES")
+    pv_fit = node(15, "PreviewImage", [X3 + 380, 340], [760, 380], [], [], title="F. Photos (top) vs fused model (bottom)")
+    link(fit, 1, pv_fit, "images", "IMAGE")
+    txt_fit = node(16, "PreviewAny", [X3 + 380, 740], [360, 300], [], [("STRING", "STRING")], title="F. Registration report")
+    link(fit, 2, txt_fit, "source", "*")
+    save = node(17, "SaveGLB", [X3 + 760, 740], [480, 480], ["ysda/v2_3"], [], title="Final model (GLB, upright)")
+    link(fit, 0, save, "mesh", "MESH")
+    groups = [
+        {"title": "0/A. Photos + masks", "bounding": [X0 - 20, 20, 820, 680], "color": "#3f789e"},
+        {"title": "B. Reconstruction: DA3 + COLMAP cameras", "bounding": [X2 - 20, 20, 380, 900], "color": "#b58b2a"},
+        {"title": "G. Generation: UniForge3D", "bounding": [X3 - 60, 20, 420, 1320], "color": "#a1309b"},
+        {"title": "F. Fusion: register + photo colours", "bounding": [X3 + 360, 20, 900, 1220], "color": "#2a6b8e"},
+    ]
+    nodes.sort(key=lambda n: n["id"])
+    wf = {"id": str(uuid.uuid4()), "revision": 0, "last_node_id": max(n["id"] for n in nodes),
+          "last_link_id": len(links), "nodes": nodes, "links": links, "groups": groups, "config": {}, "extra": {},
+          "version": 0.4}
+    json.dump(wf, open(sys.argv[1], "w"), indent=1)
+    print("wrote", sys.argv[1], len(nodes), "nodes", len(links), "links")
+    sys.exit(0)
 
 if "--v2" in sys.argv:
     # v2: photos -> masks -> RGBA views -> UniForge3D (Mac port, subprocess) -> GLB

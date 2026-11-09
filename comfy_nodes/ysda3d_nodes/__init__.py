@@ -519,7 +519,78 @@ class YSDAUniForge3D:
         return File3D(final), mesh, File3D(shape512), json.dumps(report, indent=1)
 
 
+class YSDAFitGeneratedMesh:
+    """v2.2 + v2.3: register a generated mesh (UniForge3D) to the COLMAP cameras and colour it from the photos."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "mesh": ("MESH", {"tooltip": "mesh output of YSDA UniForge3D"}),
+            "da3_geometry": ("DA3_GEOMETRY", {"tooltip": "from YSDA Refine Cameras (COLMAP)"}),
+            "object_mask": ("MASK", {"tooltip": "object_mask output of YSDA Refine Cameras (COLMAP)"}),
+            "valid_mask": ("MASK", {"tooltip": "valid_mask output of YSDA Refine Cameras (COLMAP)"}),
+            "anchor_photo": ("STRING", {"default": "IMG_4505", "tooltip": "Name/prefix of the anchor (first) view given to UniForge3D"}),
+            "names": ("YSDA_NAMES", {"tooltip": "names output of YSDA Load Image Folder"}),
+            "colours": (["photos (v2.3)", "generated"], {"default": "photos (v2.3)"}),
+            "register_iters": ("INT", {"default": 300, "min": 0, "max": 2000}),
+        }}
+
+    RETURN_TYPES = ("MESH", "IMAGE", "STRING")
+    RETURN_NAMES = ("mesh", "preview", "report")
+    FUNCTION = "run"
+    CATEGORY = CATEGORY + "/v2"
+    DESCRIPTION = ("Culls hidden faces of the generated mesh, fits a 7-DoF similarity to the masks in all COLMAP-"
+                   "registered photos (initialised from a quick v1.2 reconstruction: floor-plane up, anchor = front), "
+                   "then colours visible vertices from the photos; unobserved vertices keep the generated colours "
+                   "harmonised to the photo palette (journal 0012). Preview: photos (top) vs result (bottom).")
+
+    def run(self, mesh, da3_geometry, object_mask, valid_mask, anchor_photo, names, colours, register_iters):
+        from comfy_extras.nodes_gaussian_splat import _surface_nets
+        from ysda3d import generated, meshfix
+
+        depth, K, E, dist = _geometry_cameras(da3_geometry)
+        S, H, W = depth.shape
+        images = da3_geometry["image"].float().cpu()
+        masks = _fit_masks(object_mask, H, W, valid_mask)
+        conf = da3_geometry.get("confidence")
+        conf = conf.float().cpu() if conf is not None else None
+        all_names = [n for n in names.splitlines() if n.strip()]
+        kept = da3_geometry.get("ysda_view_index", list(range(S)))
+        view_names = [all_names[i] for i in kept] if len(all_names) >= len(kept) else all_names
+        anchor = next((i for i, n in enumerate(view_names) if n.startswith(anchor_photo)), 0)
+
+        gv = mesh.vertices[0].float().cpu()
+        gf = mesh.faces[0].long().cpu()
+        gc = (mesh.vertex_colors[0].float().cpu()[:, :3] if mesh.vertex_colors is not None
+              else torch.full((len(gv), 3), 0.7))
+        report = {}
+        gv, gf, used = meshfix.cull_hidden_faces(gv, gf, log=lambda *a: None)
+        gc = gc[used]
+        report["faces_after_cull"] = int(len(gf))
+        sn = lambda v, l, vx, o: _surface_nets(v, l, vx, o, torch.device("cpu"))  # noqa: E731
+        ref_v, _, _, _ = recon.reconstruct(depth, K, E, images, masks, sn, depth_tol=0.05, max_violations=1, conf=conf,
+                                           dist=dist, visibility="mesh", log=lambda *a: None)
+        floor = recon.floor_plane(depth, K, E, masks, dist=dist)
+        wv, info = generated.register_generated_mesh(gv, gf, K, E, masks, dist=dist, ref_verts=ref_v, floor=floor,
+                                                     anchor=anchor, iters=register_iters, log=lambda *a: None)
+        report["registration"] = info
+        if colours.startswith("photos"):
+            cols, obs = generated.recolour_from_photos(wv, gf, gc, K, E, images, masks, dist=dist, abs_cos=True)
+            report["observed_fraction"] = round(obs, 3)
+        else:
+            cols = gc
+        R_up = recon.upright_frame(E, floor[0] if floor else None, anchor)
+        disp = recon.to_display_upright(wv, R_up, floor[1] if floor else None)
+        idx = sorted(set(np.linspace(0, S - 1, min(S, 6)).round().astype(int).tolist()))
+        P, C = recon.surface_samples(wv, gf, 3_000_000, cols)
+        tiles = [torch.cat([images[i], torch.from_numpy(render_points(P, C, K[i], E[i], (H, W), radius=1,
+                                                                     k1=recon._k1(dist, i)))], 0) for i in idx]
+        out = MESH(disp[None], gf[None], vertex_colors=cols[None])
+        return out, torch.cat(tiles, 1)[None], json.dumps(report, indent=1)
+
+
 NODE_CLASS_MAPPINGS = {
+    "YSDAFitGeneratedMesh": YSDAFitGeneratedMesh,
     "YSDAPrepareUniForge3DInputs": YSDAPrepareUniForge3DInputs,
     "YSDAUniForge3D": YSDAUniForge3D,
     "YSDAReconstructMeshV12": YSDAReconstructMeshV12,
@@ -533,6 +604,7 @@ NODE_CLASS_MAPPINGS = {
     "YSDAReconstructMesh": YSDAReconstructMesh,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "YSDAFitGeneratedMesh": "YSDA Fit Generated Mesh To Photos (v2.2 + v2.3)",
     "YSDAPrepareUniForge3DInputs": "YSDA Prepare UniForge3D Inputs (v2)",
     "YSDAUniForge3D": "YSDA UniForge3D (v2, Mac)",
     "YSDAReconstructMeshV12": "YSDA Reconstruct Mesh (v1.2, upright)",
