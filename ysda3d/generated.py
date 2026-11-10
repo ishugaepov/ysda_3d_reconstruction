@@ -153,7 +153,7 @@ def _register(gen_verts, gen_faces, K, E, masks, dist, ref_verts, floor, anchor,
 
 def recolour_from_photos(verts, faces, gen_colors, K, E, images, masks, dist=None, power: float = 2.0,
                          blend_weight: float = 0.3, vis_tol_frac: float = 0.004, abs_cos: bool = False,
-                         harmonise: bool = True):
+                         harmonise: bool = True, return_harmonised: bool = False):
     """Photo colours where observed (mesh z-buffer visibility), generator colours elsewhere.
 
     a = clamp(Σ photo weights / blend_weight, 0, 1); colour = a·photo + (1−a)·generated.
@@ -191,4 +191,6 @@ def recolour_from_photos(verts, faces, gen_colors, K, E, images, masks, dist=Non
         A = torch.linalg.lstsq(X, photo[obs]).solution                 # (4,3)
         gen = (torch.cat([gen, torch.ones(len(gen), 1)], 1) @ A).clamp(0, 1)
     colors = a * photo + (1 - a) * gen
+    if return_harmonised:   # + the generator's colours after only the global colour map (an ablation baseline)
+        return colors.clamp(0, 1), float((a[:, 0] > 0.5).float().mean()), gen
     return colors.clamp(0, 1), float((a[:, 0] > 0.5).float().mean())

@@ -94,8 +94,11 @@ for tag, path in GEN.items():
     info["seconds"] = round(time.time() - t0, 1)
     results[tag + " (v2.2 registered, generated colours)"] = {**evaluate(tag + "_gen", wv, gf, gc), "registration": info}
     t0 = time.time()
-    rc, obs = generated.recolour_from_photos(wv, gf, gc, t_(K), t_(E), t_(images), t_(masks), dist=t_(dist),
-                                             abs_cos=os.environ.get("CULL", "1") == "1" or os.environ.get("REPAIR") == "1")
+    rc, obs, gh = generated.recolour_from_photos(wv, gf, gc, t_(K), t_(E), t_(images), t_(masks), dist=t_(dist),
+                                                 abs_cos=os.environ.get("CULL", "1") == "1" or os.environ.get("REPAIR") == "1",
+                                                 return_harmonised=True)
+    # generation-only colours, but with the global colour cast removed (affine RGB map fitted on training photos)
+    results[tag + " (generated colours, harmonised)"] = evaluate(tag + "_genharm", wv, gf, gh)
     results[tag + " (v2.3 photo-recoloured)"] = {**evaluate(tag + "_photo", wv, gf, rc),
                                                  "observed_fraction": round(obs, 3), "seconds": round(time.time() - t0, 1)}
     disp = recon.to_display_upright(wv, R_up, floor[1] if floor else None)
