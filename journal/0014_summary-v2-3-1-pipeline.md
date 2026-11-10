@@ -32,6 +32,53 @@ Results on 3 held-out photos (used by no method):
 | generation only (UniForge3D mesh, registered, with its own colours) | 11.00 | 11.38 | 0.962 |
 | **current pipeline (v2.3.1)** | **17.82** | **20.58** | **0.962** |
 
+## How B (reconstruction) and G (generation) work together
+**What each branch produces**
+- **G (generation)**, from 8 photos:
+  - a complete, sharp mesh with *generated* colours;
+  - in the generator's own frame: a normalised box (±0.5), with "up" and "front" as the generator guesses them (front = the anchor photo);
+  - it says nothing usable about where the photos' cameras were.
+- **B (reconstruction)**, from all 21 photos:
+  - **B2 (COLMAP):** pixel-accurate cameras for 17 photos (intrinsics, pose, lens distortion; reprojection error 0.7 px), all in one shared world frame.
+  - **B1 (DA3):** a depth map per photo, rescaled to that frame. It provides the floor plane and a rough reconstruction of the object. DA3's own camera poses also cross-check the COLMAP registrations (> 10° disagreement → rejected).
+
+**How they meet** in node F, after the generated mesh is repaired (F0):
+
+```
+21 photos ─ A. masks ─┬─ B1 DA3 depth ─ B2 COLMAP ─► cameras of 17 photos, depth at their scale, floor plane ─┐
+                      │                                                                                     │
+                      └─ G0: 8 photos ─ G UniForge3D ─► complete mesh, generator's own frame ─ F0 repair ───┤
+                                                                                                            ▼
+                     F: 1 initial alignment ─ 2 silhouette fit in all 17 cameras ─ 3 colours from the photos
+                                                                                                            ▼
+                                                         upright model in the cameras' frame, real colours
+```
+
+1. **Initial alignment.** The generator's conventions (upright, front = anchor) are matched to B's floor-plane normal (the true up) and the anchor photo's COLMAP camera (the true front). Size and centre come from the rough reconstruction. 12 trial yaw angles guard against a wrong front.
+2. **Silhouette fit.** The generated mesh is projected through each of the 17 COLMAP cameras. Adam adjusts 7 numbers (scale, rotation, translation) until the projection fills each photo's object mask without spilling outside it.
+   - Silhouette IoU goes from 0.68 to 0.96, and also reaches 0.957–0.964 on 3 photos the fit never saw.
+   - The fit still corrects about 14° of rotation after the initial alignment.
+3. **Colour transfer.** With the mesh now in the cameras' frame, every vertex is projected into every photo. The mesh's own depth buffer decides whether that photo really sees the vertex.
+   - Seen vertices (72%) take the angle-weighted photo colour.
+   - The rest keep the generated colour, mapped onto the photo palette.
+4. **Output frame.** B's floor plane and the anchor camera make the output upright and front-facing.
+5. **Evaluation** uses B as well. The held-out photos' COLMAP cameras let us render the model exactly as those photos were taken, and compare.
+
+**Why G alone is not enough**
+1. **Its colours aren't the object's.** The texture model predicts flat "albedo" colours (no fur, no shading, slightly wrong hues): held-out PSNR is 11.0 against 17.8 with photo colours. Painting photo colours onto the mesh requires knowing where each surface point appears in each photo, i.e. pixel-accurate cameras in the mesh's frame. That is exactly what B provides.
+2. **UniForge3D's internal camera estimates can't replace COLMAP.** Internally, UniForge3D predicts point maps (VGGT) for its inputs, but:
+   - they are feed-forward estimates. We measured DA3's, which are the same kind: 1.4–1.8% cross-view inconsistency, which blurred colours in v0. Bundle-adjusted COLMAP cameras agree to 0.7 px;
+   - they exist only for the 8 input photos;
+   - the official pipeline doesn't return them.
+3. **Only a few photos fit into G.** It was trained with 4 views; 8 already take 33 min, and memory grows with each view. B uses *all* photos: more colour coverage, and the photos G never saw become a free test set.
+4. **G's frame is a guess.** "Up", "front" and size live in a normalised box. B gives the true up (floor), the real camera layout and a consistent scale; the fit above still had to correct about 14°.
+5. **Faithfulness has to be checked.** A generator can invent plausible but wrong details. Only with cameras can we render the model from a photo's exact viewpoint and measure the mismatch, so versions are chosen on numbers, not impressions.
+6. **Next-best-view needs the same thing:** which surface points the real photos cover, and from where.
+
+**And why B alone is not enough:** reconstruction only knows what was photographed. v1.2 had no underside, a smeared back and a softer face (DA3 depth disagrees across views), with IoU 0.925. G supplies completeness and sharp geometry.
+
+In short: **G answers "what does the whole object look like?"; B answers "where exactly is it in each photo?"** Only the second lets us use the photos' real colours and check the result against reality.
+
 ## How it differs from the original UniForge3D (paper and code)
 | | UniForge3D | Our pipeline |
 |---|---|---|
