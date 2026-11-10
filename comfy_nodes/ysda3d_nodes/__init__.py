@@ -570,9 +570,13 @@ class YSDARepairGeneratedMesh:
         t = time.time()
         nv, nf, nc = meshfix.remesh_narrow_band(v, f, c, res=resolution, band=band, seal=seal,
                                                 close_bottom=close_bottom, log=lambda *a: None)
+        if meshfix.signed_volume(nv, nf) < 0:                # closed surface: keep the faces wound outward
+            nf = nf[:, [0, 2, 1]]
         report = {"input": meshfix.edge_stats(f), "repaired": meshfix.edge_stats(nf),
                   "seconds": round(time.time() - t, 1)}
-        return MESH(nv[None], nf[None], vertex_colors=nc[None] if nc is not None else None), json.dumps(report, indent=1)
+        return (MESH(nv[None], nf[None], vertex_colors=nc[None] if nc is not None else None,
+                     normals=recon.vertex_normals(nv, nf)[None]),       # smooth shading in the G preview
+                json.dumps(report, indent=1))
 
 
 class YSDAFitGeneratedMesh:

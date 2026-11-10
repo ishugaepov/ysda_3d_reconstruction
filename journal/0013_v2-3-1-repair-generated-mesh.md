@@ -86,6 +86,7 @@ The repair removes the holes, and it also improves held-out photo fidelity by +0
   - `ysda3d/meshfix.remesh_narrow_band`, plus `edge_stats` and `signed_volume`;
   - the report shows the input and repaired edge statistics.
 - **Workflow** `workflows/photos_to_3d_v2_3_fused.ui.json` (Desktop: `ysda_photos_to_3d_v2_3_fused`): new F0 repair node and report; the fit node takes the repaired mesh.
+  - 2026-11-10: the repair node moved into the G group (G1). G's 3D preview now shows the repaired model; the raw GLB stays in the UniForge3D run folder.
 - **Model** `models/toy/v2_3_1_repaired_k8.glb`: decimated to 600k faces for the repo, 10.8 MB, still 0 open edges. The workflow's own output has 1.85M faces.
 - **Evaluation:** `scripts/eval_v2.py` accepts `REPAIR=1` (`REPAIR_RES`, default 512) and `ONLY=<variant>`.
 

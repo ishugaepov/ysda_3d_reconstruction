@@ -1,5 +1,5 @@
 {
- "id": "87ff3d6a-34fd-4ecc-bac3-8832e01a66d0",
+ "id": "99716e58-af36-4d8f-97b2-50356e9d673c",
  "revision": 0,
  "last_node_id": 19,
  "last_link_id": 29,
@@ -503,15 +503,13 @@
     {
      "name": "model_3d",
      "type": "FILE_3D_GLB",
-     "links": [
-      19
-     ]
+     "links": []
     },
     {
      "name": "mesh",
      "type": "MESH",
      "links": [
-      20
+      19
      ]
     },
     {
@@ -540,7 +538,7 @@
    "type": "SaveGLB",
    "pos": [
     1260,
-    900
+    1350
    ],
    "size": [
     380,
@@ -552,8 +550,8 @@
    "inputs": [
     {
      "name": "mesh",
-     "type": "FILE_3D_GLB",
-     "link": 19
+     "type": "MESH",
+     "link": 21
     }
    ],
    "outputs": [],
@@ -561,16 +559,16 @@
     "Node name for S&R": "SaveGLB"
    },
    "widgets_values": [
-    "ysda/v2_3_generated_raw"
+    "ysda/v2_3_generated"
    ],
-   "title": "G. Raw generated model (albedo colours)"
+   "title": "G. Generated model (repaired, albedo colours)"
   },
   {
    "id": 14,
    "type": "YSDAFitGeneratedMesh",
    "pos": [
     1680,
-    310
+    80
    ],
    "size": [
     380,
@@ -644,7 +642,7 @@
    "type": "PreviewImage",
    "pos": [
     1680,
-    570
+    340
    ],
    "size": [
     760,
@@ -672,7 +670,7 @@
    "type": "PreviewAny",
    "pos": [
     1680,
-    970
+    740
    ],
    "size": [
     360,
@@ -706,7 +704,7 @@
    "type": "SaveGLB",
    "pos": [
     2060,
-    970
+    740
    ],
    "size": [
     480,
@@ -735,8 +733,8 @@
    "id": 18,
    "type": "YSDARepairGeneratedMesh",
    "pos": [
-    1680,
-    80
+    1260,
+    890
    ],
    "size": [
     380,
@@ -749,7 +747,7 @@
     {
      "name": "mesh",
      "type": "MESH",
-     "link": 20
+     "link": 19
     }
    ],
    "outputs": [
@@ -757,6 +755,7 @@
      "name": "mesh",
      "type": "MESH",
      "links": [
+      21,
       22
      ]
     },
@@ -764,7 +763,7 @@
      "name": "report",
      "type": "STRING",
      "links": [
-      21
+      20
      ]
     }
    ],
@@ -777,17 +776,17 @@
     1.0,
     true
    ],
-   "title": "F0. Repair generated mesh (close holes + open bottom)"
+   "title": "G1. Repair generated mesh (close holes + open bottom)"
   },
   {
    "id": 19,
    "type": "PreviewAny",
    "pos": [
-    2080,
-    80
+    1260,
+    1120
    ],
    "size": [
-    360,
+    380,
     200
    ],
    "flags": {},
@@ -797,7 +796,7 @@
     {
      "name": "source",
      "type": "*",
-     "link": 21
+     "link": 20
     }
    ],
    "outputs": [
@@ -811,7 +810,7 @@
     "Node name for S&R": "PreviewAny"
    },
    "widgets_values": [],
-   "title": "F0. Repair report"
+   "title": "G1. Repair report"
   }
  ],
  "links": [
@@ -962,26 +961,26 @@
   [
    19,
    12,
-   0,
-   13,
-   0,
-   "FILE_3D_GLB"
-  ],
-  [
-   20,
-   12,
    1,
    18,
    0,
    "MESH"
   ],
   [
-   21,
+   20,
    18,
    1,
    19,
    0,
    "*"
+  ],
+  [
+   21,
+   18,
+   0,
+   13,
+   0,
+   "MESH"
   ],
   [
    22,
@@ -1070,22 +1069,22 @@
    "color": "#b58b2a"
   },
   {
-   "title": "G. Generation: UniForge3D",
+   "title": "G. Generation: UniForge3D + repair",
    "bounding": [
     1240,
     20,
     420,
-    1320
+    1780
    ],
    "color": "#a1309b"
   },
   {
-   "title": "F. Fusion: repair + register + photo colours",
+   "title": "F. Fusion: register + photo colours",
    "bounding": [
     1660,
     20,
     900,
-    1460
+    1240
    ],
    "color": "#2a6b8e"
   }

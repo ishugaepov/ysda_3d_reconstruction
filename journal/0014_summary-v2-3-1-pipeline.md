@@ -20,7 +20,7 @@ Everything runs locally on an M3 Max with open models and no training. On the to
 | B2. Cameras | YSDA Refine Cameras (COLMAP) | Structure-from-motion on the full-resolution photos. One camera model per lens; radial distortion k1; registrations with < 200 points rejected (17 of 21 photos kept); DA3 depth rescaled to the SfM scale. Accurate cameras are what make photo colours land in the right place |
 | G0. Views | YSDA Prepare UniForge3D Inputs | Picks K = 8 photos (the first is the anchor, which becomes the model's front) and writes them as full-resolution RGBA (photo + mask) |
 | G. Generation | YSDA UniForge3D (Mac) | UniForge3D in its own venv on MPS. A joint VGGT + TRELLIS.2 model generates a complete 64³ structure, then shape at 512 → 1024 with per-voxel routing to the best-supporting view, then colours. Finished runs are cached on disk |
-| F0. Repair | YSDA Repair Generated Mesh | Rebuilds the surface as the outer boundary of a thin band around the generated mesh. Closes cracks, merges overlapping patches, caps the never-photographed bottom, winds faces outward (holes: 442k open edges → 0) |
+| G1. Repair | YSDA Repair Generated Mesh | Rebuilds the surface as the outer boundary of a thin band around the generated mesh. Closes cracks, merges overlapping patches, caps the never-photographed bottom, winds faces outward (holes: 442k open edges → 0). Uses only the generated mesh, so it's part of G, and G's 3D preview shows the repaired model |
 | F. Fusion | YSDA Fit Generated Mesh To Photos | **Registration:** a 7-DoF similarity (scale, rotation, translation) fitted to the masks of *all* registered photos, starting from a quick reconstruction (floor plane = up, anchor = front). **Colours:** each vertex takes the colour of the photos that see it (mesh z-buffer visibility, angle weighting). Unseen parts keep the generated colour, mapped onto the photo palette |
 | Output | Save GLB | Upright model with per-vertex colours and smooth normals, plus preview tiles (photos vs model) and reports |
 
@@ -42,12 +42,12 @@ Results on 3 held-out photos (used by no method):
   - **B2 (COLMAP):** pixel-accurate cameras for 17 photos (intrinsics, pose, lens distortion; reprojection error 0.7 px), all in one shared world frame.
   - **B1 (DA3):** a depth map per photo, rescaled to that frame. It provides the floor plane and a rough reconstruction of the object. DA3's own camera poses also cross-check the COLMAP registrations (> 10° disagreement → rejected).
 
-**How they meet** in node F, after the generated mesh is repaired (F0):
+**How they meet** in node F, after the generated mesh is repaired (G1):
 
 ```
 21 photos ─ A. masks ─┬─ B1 DA3 depth ─ B2 COLMAP ─► cameras of 17 photos, depth at their scale, floor plane ─┐
                       │                                                                                     │
-                      └─ G0: 8 photos ─ G UniForge3D ─► complete mesh, generator's own frame ─ F0 repair ───┤
+                      └─ G0: 8 photos ─ G UniForge3D ─► complete mesh, generator's own frame ─ G1 repair ───┤
                                                                                                             ▼
                      F: 1 initial alignment ─ 2 silhouette fit in all 17 cameras ─ 3 colours from the photos
                                                                                                             ▼

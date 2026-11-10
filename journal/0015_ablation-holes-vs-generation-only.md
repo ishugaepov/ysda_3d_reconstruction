@@ -46,3 +46,4 @@ Run-to-run spread: repeating a configuration moves PSNR by about 0.06 dB (17.82 
 
 ## Next
 - Move the repair into G, so the generated model shown in ComfyUI is already hole-free. The repair uses no cameras or photos, only the generated mesh.
+  - Done (2026-11-10): G1 in the workflow's G group. G's preview shows the repaired model, with smooth normals.
