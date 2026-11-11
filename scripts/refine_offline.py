@@ -26,7 +26,8 @@ geom = {"depth": depth, "extrinsics": torch.from_numpy(d["extrinsics"])[None], "
 masks = torch.from_numpy(d["masks"])
 t0 = time.time()
 g, report = sfm.refine_geometry(geom, names, [os.path.join(folder, n) for n in names],
-                                work_dir=os.path.join(REPO, "outputs", "sfm_work"), max_side=max_side,
+                                work_dir=os.environ.get("YSDA_SFM_WORK", os.path.join(REPO, "outputs", "sfm_work")),
+                                max_side=max_side,
                                 masks=masks, drop_unregistered="--keep-unregistered" not in sys.argv)
 report["seconds"] = round(time.time() - t0, 1)
 print(json.dumps(report, indent=1))

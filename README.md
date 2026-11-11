@@ -23,6 +23,7 @@ Constraints:
 | [02_prototype_plan.md](02_prototype_plan.md) | Detailed execution plan for the first working prototype and how to iterate on it |
 | [03_literature.md](03_literature.md) | Reading list: the math and machinery behind every stage, plus a suggested reading order |
 | [04_plan_v2_recon_plus_generation.md](04_plan_v2_recon_plus_generation.md) | **Current main direction:** reconstruction + generation (UniForge3D), Mac feasibility, iterations v2.0–v2.4 |
+| [05_benchmark_plan.md](05_benchmark_plan.md) | **Benchmark:** every approach scored on several real and synthetic objects, averaged; cached so reruns are fast |
 | [journal/](journal/README.md) | **One entry per iteration/experiment**, including failures, so we never repeat what we already tried |
 | [data/](data/README.md) | Capture datasets (input photos) |
 | [models/](models/README.md) | Result GLB per iteration, for side-by-side comparison |
@@ -30,7 +31,7 @@ Constraints:
 ## Repo layout
 
 ```
-README.md, 01_roadmap.md, 02_prototype_plan.md, 03_literature.md
+README.md, 01_roadmap.md … 05_benchmark_plan.md
 journal/        experiment log (NNNN_slug.md, TEMPLATE.md, assets/)
 data/<name>/    captures (input photos)
 models/<name>/  result GLB per iteration

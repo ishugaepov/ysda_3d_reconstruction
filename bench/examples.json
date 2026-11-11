@@ -1,0 +1,19 @@
+{
+ "comment": "Benchmark examples (05_benchmark_plan.md, journal 0016). Data lives under $YSDA_BENCH_ROOT (default ~/datasets/ysda_bench), never in the repo; this file is the recipe.",
+ "defaults": {"generator_k": 8, "seed": 42},
+ "examples": [
+  {"name": "toy", "kind": "real", "photos": "data/toy/images",
+   "heldout": ["IMG_4506", "IMG_4510", "IMG_4516"],
+   "generator_views": ["IMG_4505", "IMG_4507", "IMG_4509", "IMG_4511", "IMG_4513", "IMG_4515", "IMG_4518", "IMG_4520"],
+   "generated": "outputs/uf3d/toy_k8.glb"},
+  {"name": "co3d_cup", "kind": "real", "co3d": "cup/620_101304_203141", "n_frames": 40, "heldout_positions": [5, 18, 31]},
+  {"name": "co3d_plant", "kind": "real", "co3d": "plant/377_43429_86420", "n_frames": 40, "heldout_positions": [5, 18, 31],
+   "note": "replaces plant/375_42504_85162: COLMAP split that orbit into 3 pieces, 9 of 40 frames kept (journal 0016)"},
+  {"name": "co3d_mug", "kind": "real", "co3d": "cup/622_102276_205423", "n_frames": 40, "heldout_positions": [5, 18, 31]},
+  {"name": "co3d_apple", "kind": "real", "co3d": "apple/444_63731_125794", "n_frames": 40, "heldout_positions": [5, 18, 31],
+   "disabled": "COLMAP keeps 9 of 40 frames (orbit split into pieces); kept as a robustness case (journal 0016)"},
+  {"name": "gso_sofa", "kind": "synthetic", "gso": "3D_Dollhouse_Sofa", "gso_shard": 0, "scene_seed": 1},
+  {"name": "gso_mug", "kind": "synthetic", "gso": "ACE_Coffee_Mug_Kristen_16_oz_cup", "gso_shard": 0, "scene_seed": 2},
+  {"name": "gso_shoe", "kind": "synthetic", "gso": "ASICS_GEL1140V_WhiteBlackSilver", "gso_shard": 0, "scene_seed": 3}
+ ]
+}
