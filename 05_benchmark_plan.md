@@ -7,7 +7,7 @@ every change. Results and findings go in the journal (0016 onwards).*
 ## 1. Examples (`bench/examples.json`)
 | Kind | Source | Per example | Scored on |
 |---|---|---|---|
-| **Real** | our toy (21 photos); [CO3D-small](https://huggingface.co/datasets/XeemPad/CO3D-small) phone videos (cup, mug, plant: 40 frames each, 3 held out) | photos, nothing else | held-out photos |
+| **Real** | our toy (21 photos); [CO3D-small](https://huggingface.co/datasets/XeemPad/CO3D-small) phone videos (cup and plant: 40 frames each, 3 held out; three more sequences fail at COLMAP and are disabled) | photos, nothing else | held-out photos |
 | **Synthetic** | [Google Scanned Objects](https://huggingface.co/datasets/hugging-3d/google-scanned-objects) meshes (sofa, mug, shoe), rendered as handheld captures by `ysda3d/synth.py` | 25 renders (20 train, 3 held out between the rings, 2 low), true cameras, masks and mesh | held-out photos + low views + geometry |
 
 - **Synthetic captures** exercise the whole pipeline, from masks through COLMAP.
@@ -55,13 +55,15 @@ Every method sees only the training photos and returns a coloured mesh in the ex
   - capture: CO3D download ~30 s, or GSO render ~1 min;
   - masks + DA3: 4–7 min;
   - COLMAP: 1–2 min;
-  - UniForge3D: ~30 min, queued after all the reconstruction stages.
-- **First evaluation run:** ~10 min per example, with examples in parallel (3 workers by default). Most of it is the two registrations.
+  - UniForge3D: 21–47 min, queued after all the reconstruction stages.
+- **First evaluation run:** 17.5 min for 6 examples × 7 methods, with 3 workers. Most of it is the two registrations per example.
 - **Re-runs** recompute only what changed:
   - Pipeline stages are files in `work/<name>/`.
   - Generations are found by `ysda3d/runcache.py`, by input fingerprint, seed and port code.
   - Method stages are cached as `cache/<name>/<stage>_<hash>.pt`, keyed by input-file hashes, parameters and the source of the `ysda3d` modules they use. Editing `generated.py` re-runs registration and colouring, but not the reconstructions.
+- **Cached rerun:** ~5 s.
 - `--quick` runs one example per kind (toy, co3d_cup, gso_sofa).
+- **Paired table:** every run also reports the current pipeline minus each method per example, as median Δ and wins–losses. One example can carry an average; it can't carry a median or a win count.
 
 ## 5. Usage
 ```
@@ -74,7 +76,7 @@ $PY -I scripts/bench_run.py --quick --methods recon_v1_2,fused_v2_3_1
 To test a new idea, add it as a method in `METHODS` (or change a stage). The rerun reuses everything it doesn't touch.
 
 ## 6. Known limitations
-- **Few examples so far (7).** Adding more costs mostly generation time. One GSO shard has ~24 objects, CO3D-small has ~20 sequences per category, and own captures are best of all.
+- **Few examples so far (6).** Adding more costs mostly generation time. One GSO shard has ~24 objects, CO3D-small has ~20 sequences per category, and own captures are best of all.
 - **Synthetic renders are cleaner than real photos** (no blur, simple lighting). Look at the real and synthetic groups separately, not only at the overall mean.
 - **Held-out photos mostly see what the training photos saw.** Completeness and hallucinated parts are tested only by the low views and the true geometry, on synthetic examples.
 - **Evaluation uses the pipeline's own masks.** For synthetic examples their quality is reported.

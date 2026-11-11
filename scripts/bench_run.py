@@ -20,6 +20,7 @@ import time
 COMFY = os.path.expanduser("~/ComfyUI-Installs/ComfyUI/ComfyUI")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QUICK = ["toy", "co3d_cup", "gso_sofa"]
+REFERENCE = "fused_v2_3_1"          # paired comparisons are against the current pipeline
 COLUMNS = {   # group -> [(metric, header, higher is better)]
     "all": [("iou", "IoU", 1), ("psnr_full", "PSNR full", 1), ("psnr_cov", "PSNR cov", 1)],
     "synthetic": [("iou_low", "IoU low", 1), ("psnr_full_low", "PSNR low", 1), ("chamfer_pct", "Chamfer %", 0),
@@ -78,6 +79,27 @@ def summarise(results, methods):
                 cells.append(f"**{cell}**" if best.get(k) == m and m != "oracle_gt_mesh" else cell)
             lines.append(f"| {m} | " + " | ".join(cells) + " |")
         lines.append("")
+    ref = REFERENCE if REFERENCE in methods else methods[0]
+    pair_cols = [("iou", "IoU", 1), ("psnr_full", "PSNR full", 1), ("psnr_cov", "PSNR cov", 1), ("coverage", "coverage", 1),
+                 ("chamfer_pct", "Chamfer % (synth.)", 0), ("fscore_2pct", "F@2% (synth.)", 1)]
+    lines += [f"### paired: `{ref}` minus each method, per example (median Δ, wins–losses of `{ref}`)", "",
+              "Averages can hide one example carrying a method; the median and the win count do not.", "",
+              "| vs method | " + " | ".join(h for _, h, _ in pair_cols) + " |", "|---|" + "---|" * len(pair_cols)]
+    for m in methods:
+        if m in (ref, "oracle_gt_mesh"):
+            continue
+        cells = []
+        for k, _, hib in pair_cols:
+            d = [r["methods"][ref][k] - r["methods"][m][k] for r in ok
+                 if k in r["methods"].get(ref, {}) and k in r["methods"].get(m, {})]
+            if not d:
+                cells.append("–")
+                continue
+            wins = sum((x > 1e-9) if hib else (x < -1e-9) for x in d)
+            losses = sum((x < -1e-9) if hib else (x > 1e-9) for x in d)
+            cells.append(f"{float(np.median(d)):+.3f} ({wins}–{losses})")
+        lines.append(f"| {m} | " + " | ".join(cells) + " |")
+    lines.append("")
     lines += ["### per example: PSNR full / IoU (held-out views)", "",
               "| method | " + " | ".join(r["example"] for r in ok) + " |", "|---|" + "---|" * len(ok)]
     for m in methods:
