@@ -24,6 +24,7 @@ Constraints:
 | [03_literature.md](03_literature.md) | Reading list: the math and machinery behind every stage, plus a suggested reading order |
 | [04_plan_v2_recon_plus_generation.md](04_plan_v2_recon_plus_generation.md) | **Current main direction:** reconstruction + generation (UniForge3D), Mac feasibility, iterations v2.0–v2.4 |
 | [05_benchmark_plan.md](05_benchmark_plan.md) | **Benchmark:** every approach scored on several real and synthetic objects, averaged; cached so reruns are fast |
+| [bench/report/](bench/report/README.md) | **Benchmark report:** input photos, held-out photos vs every method's render, and views of every method's model, for each example |
 | [journal/](journal/README.md) | **One entry per iteration/experiment**, including failures, so we never repeat what we already tried |
 | [data/](data/README.md) | Capture datasets (input photos) |
 | [models/](models/README.md) | Result GLB per iteration, for side-by-side comparison |
