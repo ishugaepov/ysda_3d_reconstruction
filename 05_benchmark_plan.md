@@ -72,7 +72,14 @@ $PY -I scripts/bench_prepare.py --no-generate     # captures, masks, DA3, COLMAP
 $PY -I scripts/bench_prepare.py                   # + the UniForge3D queue (~30 min per example, resumable)
 $PY -I scripts/bench_run.py                       # all methods x all prepared examples -> outputs/bench/latest.md
 $PY -I scripts/bench_run.py --quick --methods recon_v1_2,fused_v2_3_1
+$PY -I scripts/bench_report.py                   # pictures + GLBs of every method's model (~30 s)
 ```
+**Where things are:**
+- input photos: `$YSDA_BENCH_ROOT/examples/<name>/photos/` (the toy: `data/toy/images/`);
+- for synthetic examples, true masks and mesh: `examples/<name>/gt/`;
+- the textured scans: `gso_shard0/extracted/<object>.glb`;
+- **report:** `$YSDA_BENCH_ROOT/report/index.html`. Per example: input photos (held-out and generator views marked), each held-out photo next to every method's render, four views of every model, metrics;
+- **models:** `~/ComfyUI-Shared/input/3d/ysda_bench/<name>/<method>.glb`. Open them in ComfyUI with **Load 3D** (`3d/ysda_bench/...`, press R to refresh) or any GLB viewer. Real examples are in the upright pipeline frame, synthetic ones in the true frame, next to `gt_mesh.glb`.
 To test a new idea, add it as a method in `METHODS` (or change a stage). The rerun reuses everything it doesn't touch.
 
 ## 6. Known limitations

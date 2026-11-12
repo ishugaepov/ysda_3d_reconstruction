@@ -101,6 +101,7 @@ Per example, full-mask PSNR:
   - `scripts/bench_prepare.py`, `scripts/bench_run.py`: the runner reports averages over common examples and a paired table against the current pipeline.
 - **Config:** `bench/examples.json`.
 - **Output:** `outputs/bench/latest.md`; a snapshot is in [assets/0016_benchmark_summary.md](assets/0016_benchmark_summary.md).
+- **Visual report (added 2026-11-12):** `scripts/bench_report.py` writes `~/datasets/ysda_bench/report/index.html` (photos, held-out renders, model views) and every model as a GLB in `~/ComfyUI-Shared/input/3d/ysda_bench/` (ComfyUI Load 3D).
 
 ## Next
 1. **Edge coverage:** after registration, refine the silhouette fit or apply a small dilation, or move vertices slightly toward photo consistency. Track coverage and full-mask PSNR on held-out views.
