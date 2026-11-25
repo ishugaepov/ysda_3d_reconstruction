@@ -23,6 +23,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ap = argparse.ArgumentParser()
 ap.add_argument("--examples", default="", help="comma-separated names (default: all)")
 ap.add_argument("--no-generate", action="store_true", help="stop before UniForge3D")
+ap.add_argument("--set", default="main", help="example set when --examples is not given (e.g. monuments)")
 args = ap.parse_args()
 sys.argv = sys.argv[:1]
 sys.path[:0] = [COMFY, REPO]
@@ -56,6 +57,18 @@ def run(cmd, logfile, env=None):
         raise RuntimeError(f"{os.path.basename(cmd[2])} failed (exit {r.returncode}), see {logfile}")
 
 
+def da3_cameras(da3_path, out_path):
+    """An sfm.npz with DA3's cameras (intrinsics rescaled to the canvas) and DA3 depth, for every photo."""
+    import torch
+    from ysda3d import recon
+    d = np.load(da3_path)
+    H, W = d["depth"].shape[1:]
+    K = recon.rescale_intrinsics(torch.from_numpy(d["intrinsics"]), recon.da3_processing_size(H, W, int(d["da3_res"])), (H, W))
+    np.savez_compressed(out_path, names=d["names"], images=d["images"], masks=d["masks"], valid=d["valid"],
+                        depth=d["depth"], confidence=d["confidence"], intrinsics=K.numpy().astype(np.float32),
+                        extrinsics=d["extrinsics"].astype(np.float32), k1=np.zeros(len(d["names"]), np.float32))
+
+
 def object_centre(E):
     """Least-squares point closest to all optical axes (the object the photographer kept in view)."""
     A, b = np.zeros((3, 3)), np.zeros(3)
@@ -72,6 +85,8 @@ def prepare_recon(ex):
     w = bench.work_dir(ex)
     if ex["kind"] == "real" and "co3d" in ex:
         bench.fetch_co3d(ex, log=log)
+    elif ex["kind"] == "real" and "local" in ex:
+        bench.fetch_local(ex, log=log)
     elif ex["kind"] == "synthetic":
         bench.fetch_gso(ex, load_glb, log=log)
     photos = bench.photos_dir(ex)
@@ -80,31 +95,69 @@ def prepare_recon(ex):
         t = time.time()
         run([PY, "-I", os.path.join(REPO, "scripts", "run_da3_offline.py"), photos, da3], os.path.join(w, "da3.log"))
         log(f"   {ex['name']}: masks + DA3 {time.time() - t:.0f}s")
-    if not os.path.exists(sfm):
+    cams_json = os.path.join(w, "cameras.json")
+    if not os.path.exists(cams_json):
         t = time.time()
-        run([PY, "-I", os.path.join(REPO, "scripts", "refine_offline.py"), da3, photos, sfm], os.path.join(w, "sfm.log"),
-            env=dict(os.environ, YSDA_SFM_WORK=os.path.join(w, "sfm_work")))
-        log(f"   {ex['name']}: COLMAP {time.time() - t:.0f}s")
+        n_photos = len(np.load(da3)["names"])
+        try:
+            if not os.path.exists(sfm):
+                run([PY, "-I", os.path.join(REPO, "scripts", "refine_offline.py"), da3, photos, sfm], os.path.join(w, "sfm.log"),
+                    env=dict(os.environ, YSDA_SFM_WORK=os.path.join(w, "sfm_work")))
+            n_reg = len(np.load(sfm)["names"])
+        except RuntimeError:
+            n_reg = 0
+        log(f"   {ex['name']}: COLMAP {time.time() - t:.0f}s, registered {n_reg}/{n_photos}")
+        if n_reg < max(4, 0.6 * n_photos):
+            # Sparse captures (a few photos far apart): SfM finds no good initial pair. Fall back to DA3's own
+            # cameras for every method, as v0 does; less accurate (journal 0004), but available for all photos.
+            if os.path.exists(sfm):
+                os.replace(sfm, os.path.join(w, "sfm_colmap.npz"))
+            source = f"DA3 (COLMAP registered {n_reg}/{n_photos})"
+            cam_src = da3
+            if ex.get("camera_views") == "full":
+                # Close-ups mixed with distant shots make DA3's joint pose estimate inconsistent (journal 0017):
+                # estimate the cameras from the full views only; the close-ups drop out of the example.
+                dv = np.load(da3)
+                full = bench.full_views(dv["masks"], dv["valid"])
+                drop = [str(n) for n, f in zip(dv["names"], full) if not f]
+                if drop:
+                    cam_src = os.path.join(w, "da3_fullviews.npz")
+                    if not os.path.exists(cam_src):
+                        run([PY, "-I", os.path.join(REPO, "scripts", "run_da3_offline.py"), photos, cam_src, "--drop", ",".join(drop)],
+                            os.path.join(w, "da3_fullviews.log"))
+                    source = f"DA3 on the full views only (COLMAP registered {n_reg}/{n_photos}; close-ups {drop} dropped)"
+            da3_cameras(cam_src, sfm)
+        else:
+            source = f"COLMAP ({n_reg}/{n_photos} registered)"
+        json.dump({"source": source}, open(cams_json, "w"), indent=1)
+        log(f"   {ex['name']}: cameras from {source}")
     split = os.path.join(w, "split.json")
     if not os.path.exists(split):
         s = np.load(sfm)
         names = [str(n) for n in s["names"]]
         stem = lambda n: os.path.splitext(n)[0]  # noqa: E731
-        held = [n for n in names if stem(n) in bench.meta(ex)["heldout"]]
+        E_all = s["extrinsics"].astype(np.float64)
+        x = object_centre(E_all)
+        C = np.stack([-e[:3, :3].T @ e[:3, 3] for e in E_all])
+        dirs_all = (C - x) / np.linalg.norm(C - x, axis=1, keepdims=True)
+        dv = np.load(da3)
+        dnames = [str(n) for n in dv["names"]]
+        full_all = bench.full_views(s["masks"], dv["valid"][[dnames.index(n) for n in names]])   # da3.npz has every photo
+        m = bench.meta(ex)
+        if m["heldout"] == "auto":                      # sparse own captures: pick after COLMAP
+            held = [names[i] for i in bench.auto_heldout(dirs_all, full_all, m.get("n_heldout", 1))]
+        else:
+            held = [n for n in names if stem(n) in m["heldout"]]
         train = [n for n in names if n not in held]
         if "generator_views" in ex:
             views = [next(n for n in train if stem(n) == v) for v in ex["generator_views"]]
         else:
-            idx = [names.index(n) for n in train]
-            E = s["extrinsics"][idx].astype(np.float64)
-            x = object_centre(E)
-            C = np.stack([-e[:3, :3].T @ e[:3, 3] for e in E])
-            dirs = (C - x) / np.linalg.norm(C - x, axis=1, keepdims=True)
+            idx = [names.index(n) for n in train if full_all[names.index(n)]] or [names.index(n) for n in train]
             areas = s["masks"][idx].reshape(len(idx), -1).mean(1)
-            views = [train[i] for i in bench.select_views(dirs, areas, ex["generator_k"])]
-        lost = sorted(set(bench.meta(ex)["heldout"]) - {stem(n) for n in held})
-        json.dump({"train": train, "heldout": held, "heldout_not_registered": lost, "generator_views": views},
-                  open(split, "w"), indent=1)
+            views = [names[idx[i]] for i in bench.select_views(dirs_all[idx], areas, ex["generator_k"])]
+        lost = [] if m["heldout"] == "auto" else sorted(set(m["heldout"]) - {stem(n) for n in held})
+        json.dump({"train": train, "heldout": held, "heldout_not_registered": lost, "generator_views": views,
+                   "full_views": [n for n, f in zip(names, full_all) if f]}, open(split, "w"), indent=1)
         log(f"   {ex['name']}: {len(train)} train / {len(held)} held-out registered (lost {lost}); "
             f"generator views {[stem(v) for v in views]}")
     uf_in = os.path.join(w, "uf_inputs")
@@ -160,7 +213,7 @@ def attempt(stage, fn, ex):
         return False
 
 
-exs = bench.load_examples([n for n in args.examples.split(",") if n])
+exs = bench.load_examples([n for n in args.examples.split(",") if n], set_name=args.set)
 ready = []
 for ex in exs:
     log(f"{ex['name']}: capture + reconstruction stages")

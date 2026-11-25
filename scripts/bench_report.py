@@ -180,8 +180,10 @@ def _work(ex, methods, out_root, export_glb=True):
             sheet.paste(t, (420 * x, 420 * y))
     sheet.save(os.path.join(out, "models.jpg"), quality=82)
     source = c.meta.get("source") or f"{ex['photos']} (our photos, in this repo)"
+    cj = os.path.join(bench.work_dir(ex), "cameras.json")
+    cameras = json.load(open(cj))["source"] if os.path.exists(cj) else "COLMAP"
     return {"example": ex["name"], "kind": c.meta.get("kind"), "glbs": glbs, "photos": bench.photos_dir(ex),
-            "source": source, "license": c.meta.get("license", "ours"), "n_photos": len(c.names),
+            "source": source, "cameras": cameras, "license": c.meta.get("license", "ours"), "n_photos": len(c.names),
             "n_train": len(c.train), "n_held": len(c.held), "seconds": round(time.time() - t0, 1)}
 
 
@@ -254,9 +256,14 @@ def write_markdown(out_root, items, results, summary_md):
          "## Examples", "", " · ".join(f"[{it['example']}](#{it['example']})" for it in items), ""]
     for it in items:
         ex = it["example"]
-        L += [f"## {ex}", "", f"{it['kind']}; source: {it['source']}; licence: {it['license']}; "
-              f"{it['n_photos']} registered photos, of which {it['n_held']} held out.", ""]
+        L += [f"## {ex}", "", f"{it['kind']}; source: {it['source']}; licence: {it['license']}; cameras: {it['cameras']}; "
+              f"{it['n_photos']} photos, of which {it['n_held']} held out.", ""]
         r = by_ex.get(ex)
+        ck = ((r or {}).get("diagnostics") or {}).get("camera_check_train_iou")
+        if ck is not None:
+            L += [f"Camera check (reconstruction-only carve vs its own training masks, IoU): **{ck:.2f}**"
+                  + (" ⚠ below 0.8: the cameras disagree, so held-out scores here mostly measure camera error, not the method."
+                     if ck < 0.8 else " (consistent cameras)."), ""]
         if r and r.get("methods"):
             keys = ["iou", "coverage", "psnr_full", "psnr_cov", "iou_low", "psnr_full_low", "chamfer_pct", "fscore_2pct"]
             keys = [k for k in keys if any(k in v for v in r["methods"].values())]
@@ -278,6 +285,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--examples", default="")
     ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--set", default="main", help="example set when --examples is not given (e.g. monuments)")
     ap.add_argument("--out", default="", help="output folder (default $YSDA_BENCH_ROOT/report)")
     ap.add_argument("--no-glb", action="store_true", help="don't (re)write the GLB models")
     ap.add_argument("--no-html", action="store_true", help="Markdown only (e.g. for the repo copy)")
@@ -285,7 +293,7 @@ def main():
     sys.argv = sys.argv[:1]
     sys.path[:0] = [COMFY, REPO]
     from ysda3d import bench, bench_eval
-    exs = bench.load_examples([n for n in args.examples.split(",") if n] or None)
+    exs = bench.load_examples([n for n in args.examples.split(",") if n] or None, set_name=args.set)
     exs = [e for e in exs if os.path.exists(os.path.join(bench.ROOT, "work", e["name"], "split.json"))]
     out_root = os.path.abspath(args.out) if args.out else os.path.join(bench.ROOT, "report")
     os.makedirs(out_root, exist_ok=True)

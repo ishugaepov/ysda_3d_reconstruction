@@ -29,11 +29,12 @@ CO3D_REPO = "XeemPad/CO3D-small"
 GSO_REPO = "hugging-3d/google-scanned-objects"
 
 
-def load_examples(names=None):
+def load_examples(names=None, set_name: str = "main"):
+    """Examples by name, or else the enabled examples of one set ("main" = the benchmark of journal 0016)."""
     cfg = json.load(open(os.path.join(REPO, "bench", "examples.json")))
     exs = [dict(cfg["defaults"], **e) for e in cfg["examples"]]
     if not names:
-        exs = [e for e in exs if "disabled" not in e]       # disabled examples run only when named explicitly
+        exs = [e for e in exs if "disabled" not in e and e.get("set", "main") == set_name]
     if names:
         missing = set(names) - {e["name"] for e in exs}
         if missing:
@@ -61,6 +62,23 @@ def meta(ex):
     if "photos" in ex:
         return {"kind": ex["kind"], "heldout": ex["heldout"]}
     return json.load(open(os.path.join(example_dir(ex), "meta.json")))
+
+
+def fetch_local(ex, log=print):
+    """Copy a folder of the user's own photos (e.g. ~/Downloads/monument_589); held-out photos are picked
+    after COLMAP (scripts/bench_prepare.py, auto_heldout), because the choice needs the cameras."""
+    d = example_dir(ex)
+    if os.path.exists(os.path.join(d, "meta.json")):
+        return
+    src = os.path.expanduser(ex["local"])
+    names = sorted(f for f in os.listdir(src) if f.lower().endswith((".jpg", ".jpeg", ".png", ".heic")))
+    os.makedirs(os.path.join(d, "photos"), exist_ok=True)
+    for n in names:
+        shutil.copy2(os.path.join(src, n), os.path.join(d, "photos", n))
+    json.dump({"kind": "real", "source": f"own photos ({os.path.basename(src.rstrip('/'))})", "license": "ours",
+               "heldout": ex.get("heldout", "auto"), "n_heldout": ex.get("n_heldout", 1)},
+              open(os.path.join(d, "meta.json"), "w"), indent=1)
+    log(f"   {ex['name']}: copied {len(names)} photos from {src}")
 
 
 # ------------------------------------------------------------------------------------------- downloads
@@ -165,9 +183,39 @@ def code_hash(*modules) -> str:
     return file_hash(*[os.path.join(REPO, "ysda3d", m + ".py") for m in modules])
 
 
+def full_views(masks: np.ndarray, valid: np.ndarray, max_side_frac: float = 0.2) -> np.ndarray:
+    """Per view: does the photo show the whole object? A close-up cuts the object at an image edge, so the
+    object covers much of that edge; a statue's base just grazing the bottom edge still counts as full."""
+    out = []
+    for m, v in zip(masks, valid):
+        ys, xs = np.nonzero(v > 0.5)
+        mm = m[ys.min():ys.max() + 1, xs.min():xs.max() + 1] >= 0.5
+        out.append(max(mm[0].mean(), mm[-1].mean(), mm[:, 0].mean(), mm[:, -1].mean()) <= max_side_frac)
+    return np.array(out)
+
+
+def auto_heldout(dirs: np.ndarray, full: np.ndarray, n: int, min_train: int = 3, min_full_train: int = 2):
+    """Held-out views for sparse captures: repeatedly the view nearest to another remaining view (the most
+    redundant one), so evaluation interpolates between training views. Full views are preferred, but only
+    while >= min_full_train of them stay for the generator; otherwise a close-up is held out (it is still a
+    fair test inside its frame). Always leaves >= min_train views."""
+    remaining, held = list(range(len(dirs))), []
+    while len(held) < n and len(remaining) > min_train:
+        n_full = sum(full[i] for i in remaining)
+        cand = [i for i in remaining if full[i]] if n_full > min_full_train else [i for i in remaining if not full[i]]
+        if not cand:
+            break
+        ang = lambda i: min(np.arccos(np.clip(dirs[i] @ dirs[j], -1, 1)) for j in remaining if j != i)  # noqa: E731
+        best = min(cand, key=ang)
+        held.append(best)
+        remaining.remove(best)
+    return held
+
+
 def select_views(dirs: np.ndarray, areas: np.ndarray, k: int):
     """Generator inputs: the view with the largest object (anchor = front), then farthest-point sampling
-    of the viewing directions (unit vectors object -> camera), so K views spread around the object."""
+    of the viewing directions (unit vectors object -> camera), so K views spread around the object.
+    Callers pass only full views (full_views), so a close-up never becomes the anchor."""
     picks = [int(np.argmax(areas))]
     while len(picks) < min(k, len(dirs)):
         dmin = np.min(np.arccos(np.clip(dirs @ dirs[picks].T, -1, 1)), axis=1)

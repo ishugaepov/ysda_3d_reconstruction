@@ -16,10 +16,15 @@ every change. Results and findings go in the journal (0016 onwards).*
   - Cameras: rings at ~25° and ~50° elevation, plus 2 near-top views.
   - Held out: views between the rings, and 2 at ~10° elevation. The low views test parts the training views saw only obliquely.
 - **Data** lives in `$YSDA_BENCH_ROOT` (default `~/datasets/ysda_bench`), never in the repo. The CO3D licence is non-commercial, and the photos are large. The repo holds the recipe: sequence/object ids, seeds, held-out rules.
+- **Sets:** `main` is the benchmark of journal 0016; `monuments` holds own sparse captures (#0017). Choose one with `--set`, or name examples with `--examples`.
+- **Cameras:** COLMAP by default. If it registers < 60% of the photos (sparse captures), every method falls back to DA3's cameras (`work/<name>/cameras.json`). `camera_views: "full"` estimates them from full views only, without close-ups.
+- **Camera check:** the IoU of the reconstruction-only carve against its own training masks, in each example's diagnostics. Below ~0.8 the cameras disagree, and held-out scores mostly measure camera error; the report flags it.
+- **Close-ups:** only full views (the object covers ≤ 20% of every image edge) become generator inputs. Held-out photos are picked automatically when not listed.
 - **Adding an example** is one line in `examples.json`:
   - a CO3D sequence id;
   - a GSO object name (each 0.5 GB shard has ~24 objects);
-  - or your own photos: `{"name": ..., "kind": "real", "photos": "data/<name>/images", "heldout": [...]}`.
+  - or your own photos, either from the repo, `{"name": ..., "kind": "real", "photos": "data/<name>/images", "heldout": [...]}`,
+    or from a local folder, `{"name": ..., "kind": "real", "set": ..., "local": "~/Downloads/<folder>", "n_heldout": 1}`.
 
 ## 2. Methods (`ysda3d/bench_eval.py`, `METHODS`)
 Every method sees only the training photos and returns a coloured mesh in the example's COLMAP frame.

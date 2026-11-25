@@ -15,6 +15,13 @@
    "disabled": "COLMAP keeps 9 of 40 frames (orbit split into pieces); kept as a robustness case (journal 0016)"},
   {"name": "gso_sofa", "kind": "synthetic", "gso": "3D_Dollhouse_Sofa", "gso_shard": 0, "scene_seed": 1},
   {"name": "gso_mug", "kind": "synthetic", "gso": "ACE_Coffee_Mug_Kristen_16_oz_cup", "gso_shard": 0, "scene_seed": 2},
-  {"name": "gso_shoe", "kind": "synthetic", "gso": "ASICS_GEL1140V_WhiteBlackSilver", "gso_shard": 0, "scene_seed": 3}
+  {"name": "gso_shoe", "kind": "synthetic", "gso": "ASICS_GEL1140V_WhiteBlackSilver", "gso_shard": 0, "scene_seed": 3},
+  {"name": "monument_589", "kind": "real", "set": "monuments", "local": "~/Downloads/monument_589", "heldout": ["004", "008"],
+   "camera_views": "full",
+   "note": "standing statue on a pedestal, 9 photos incl. 2 close-ups (own photos, not in the repo). Held out by hand: the masks of the two wide shots (001, 002) include the pedestal, the other masks only the figure"},
+  {"name": "monument_616", "kind": "real", "set": "monuments", "local": "~/Downloads/monument_616", "n_heldout": 1,
+   "note": "seated statue, 4 photos ~90 degrees apart"},
+  {"name": "monument_625", "kind": "real", "set": "monuments", "local": "~/Downloads/monument_625", "n_heldout": 1,
+   "note": "thin metal arch, 6 photos incl. close-ups"}
  ]
 }

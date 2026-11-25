@@ -120,12 +120,13 @@ def main():
     ap.add_argument("--methods", default="")
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--set", default="main", help="example set when --examples is not given (e.g. monuments)")
     args = ap.parse_args()
     sys.argv = sys.argv[:1]
     sys.path[:0] = [COMFY, REPO]
     from ysda3d import bench, bench_eval
     names = [n for n in args.examples.split(",") if n] or (QUICK if args.quick else None)
-    exs = bench.load_examples(names)
+    exs = bench.load_examples(names, set_name=args.set)
     methods = [m for m in args.methods.split(",") if m] or list(bench_eval.METHODS)
     threads = max(1, (os.cpu_count() or 8) // max(1, args.workers))
     t0 = time.time()

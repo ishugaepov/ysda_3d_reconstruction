@@ -322,6 +322,13 @@ def evaluate_example(ex, methods):
         res[name] = m
     diag = {"train_views": len(c.train), "heldout_views": len(interp), "heldout_low_views": len(low),
             "generated": c.glb is not None, "stage_seconds": c.timings}
+    # Camera check: how well the carved reconstruction fits its *own* training photos. With consistent cameras a
+    # visual hull matches its masks closely (> 0.85); a low value means the cameras disagree, and every
+    # method's held-out scores then mostly measure camera error (journal 0017).
+    cam = c.recon_v12()
+    ck = c.cached("camera_check", {"in": c.inputs, "code": bench.code_hash("bench_eval", "recon", "synth")},
+                  lambda: photo_metrics(c, cam["v"], cam["f"], cam["c"], c.train))
+    diag["camera_check_train_iou"] = round(ck["iou"], 3)
     if synthetic:                                     # how good was the masking stage?
         from PIL import Image
         ious = []
