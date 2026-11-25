@@ -42,7 +42,7 @@ How do the approaches built so far do on our own small captures of outdoor monum
 | v2.3 | 12.25 / 0.284 | 10.62 / **0.809** | 12.24 / **0.626** | **11.70** | **0.573** |
 | v2.3.1 (current) | **12.71** / 0.280 | 9.56 / 0.727 | 12.21 / 0.603 | 11.49 | 0.537 |
 
-The report has the photos, the held-out comparisons, four views of every model and the GLBs: `~/datasets/ysda_bench/report_monuments/index.html`. The models also appear in ComfyUI's Load 3D as `3d/ysda_bench/monument_*/`.
+The report has the photos, the held-out comparisons and four views of every model: in the repo at [bench/report_monuments/](../bench/report_monuments/README.md). A local copy with links to the GLBs is at `~/datasets/ysda_bench/report_monuments/index.html`. The models also appear in ComfyUI's Load 3D as `3d/ysda_bench/monument_*/`.
 
 ## Findings
 1. **Visually, generation wins on all three, and by a lot.**
